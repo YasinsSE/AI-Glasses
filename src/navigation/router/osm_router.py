@@ -9,21 +9,32 @@ import json
 # -------------------------------
 # AYARLAR
 # -------------------------------
-SPEED_LIMITS = {
-    'motorway': 120, 'motorway_link': 100,
-    'trunk': 110, 'trunk_link': 90,
-    'primary': 90, 'primary_link': 70,
-    'secondary': 70, 'secondary_link': 50,
-    'tertiary': 50, 'tertiary_link': 40,
-    'residential': 30, 'living_street': 20,
-    'service': 20, 'unclassified': 30
+WALKING_SPEED = 5.0
+
+WALKABLE_TYPES = {
+    # Saf Yaya Yolları
+    'footway', 'pedestrian', 'path', 'steps', 'cycleway', 'living_street', 'track', 'crossing',
+    
+    # Araç Yolları Kaldırım var gibi davranıyoruz
+    'residential', 'service', 'unclassified',
+    'primary', 'primary_link',
+    'secondary', 'secondary_link',
+    'tertiary', 'tertiary_link',
+    'trunk', 'trunk_link'  
 }
-MAX_SPEED = 120.0
+# Yayaların girmesi tehlikeli olan yollar (Muhtemelen kaldırılacak.)
+FORBIDDEN_TYPES = {'motorway', 'motorway_link'}
 
 # -------------------------------
-# Temel Sınıflar ve Fonksiyonlar
+# Helper Fonksiyonlar
 # -------------------------------
 def haversine_distance(lat1, lon1, lat2, lon2):
+    """
+    İki coğrafi koordinat (enlem, boylam) arasindaki kuş uçuşu mesafeyi hesaplar.
+    Dünyanin küresel şeklini (Haversine formülü) baz alir.
+    
+    Döndürdüğü Değer: Kilometre (km) cinsinden mesafe.
+    """
     R = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
@@ -32,6 +43,11 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     return R * c
 
 def calculate_bearing(n1, n2):
+    """
+    İki nokta arasindaki pusula açisini (0-360 derece) hesaplar.
+    0: Kuzey, 90: Doğu, 180: Güney, 270: Bati.
+    Bu açi, navigasyonda "sağa dön", "sola dön" demek için kullanilir.
+    """
     lat1, lon1 = math.radians(n1.lat), math.radians(n1.lon)
     lat2, lon2 = math.radians(n2.lat), math.radians(n2.lon)
     d_lon = lon2 - lon1
@@ -39,24 +55,50 @@ def calculate_bearing(n1, n2):
     x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(d_lon)
     return (math.degrees(math.atan2(y, x)) + 360) % 360
 
+def get_clock_direction(current_heading, target_bearing):
+    # Kullanıcının yüzü (current_heading) ile hedef (target_bearing) arasındaki fark
+    diff = (target_bearing - current_heading + 360) % 360
+    
+    # 360 dereceyi 12 saate böl (Her saat dilimi 30 derece)
+    clock_hour = int((diff + 15) // 30)
+    if clock_hour == 0: clock_hour = 12
+    
+    return f"Saat {clock_hour} yönünde"
+
 def get_turn_instruction(diff):
+    """
+    Giriş açisi ile çikiş açisi arasindaki farka bakarak 
+    sözel bir yön tarifi (Sağa dön, Düz git vb.) üretir.
+    """
     diff = (diff + 180) % 360 - 180
     if diff > 45: return "Sağa Keskin Dönün"
     elif diff > 10: return "Sağa Dönün"
     elif diff < -45: return "Sola Keskin Dönün"
     elif diff < -10: return "Sola Dönün"
     return "Düz Devam Edin"
-
+# -------------------------------
+# Veri Yapıları (Graph)
+# -------------------------------
 class Edge:
+    """
+    İki düğüm (Node) arasindaki bağlantiyi (yolu) temsil eder.
+    Yolun uzunluğunu, tipini ve geçiş süresini tutar.
+    """
     __slots__ = ['target', 'distance', 'time', 'name', 'type']
     def __init__(self, target, dist, r_type, name):
         self.target = target
         self.distance = dist
         self.name = name
         self.type = r_type
-        self.time = dist / SPEED_LIMITS.get(r_type, 30)
+        
+        factor = 2.0 if r_type == 'steps' else 1.0
+        self.time = (dist / WALKING_SPEED) * factor
 
 class Node:
+    """
+    Haritadaki tek bir noktayi (GPS koordinatini) temsil eder.
+    Komşu noktalara giden bağlantilari (edges) listesinde tutar.
+    """
     __slots__ = ['id', 'lat', 'lon', 'edges']
     def __init__(self, nid, lat, lon):
         self.id = nid
@@ -65,11 +107,20 @@ class Node:
         self.edges = []
 
 class RoutingDB:
+    """
+    Tüm harita verisini (Düğümler ve Yollar) hafizada tutan ana veritabani sinifidir.
+    XML'den okunan veriler buraya kaydedilir.
+    """
     def __init__(self):
         self.nodes = {}
     def add_node(self, node):
+        """Sisteme yeni bir nokta ekler."""
         self.nodes[node.id] = node
     def add_edge(self, u, v, r_type, name, oneway):
+        """
+        İki nokta (u ve v) arasına yol ekler.
+        Yayalar için 'oneway' (tek yön) genellikle yok sayılır (False gönderilir).
+        """
         n1, n2 = self.nodes.get(u), self.nodes.get(v)
         if not n1 or not n2: return
         d = haversine_distance(n1.lat, n1.lon, n2.lat, n2.lon)
@@ -77,15 +128,23 @@ class RoutingDB:
         if not oneway:
             n2.edges.append(Edge(n1, d, r_type, name))
     def cleanup(self):
+        """Herhangi bir yola bağlı olmayan (izole) noktaları hafızadan siler."""
         self.nodes = {k: v for k, v in self.nodes.items() if len(v.edges) > 0}
-
+# -------------------------------
+# OSM Dosya Okuyucu
+# -------------------------------
 class OSMHandler(sax.ContentHandler):
+    """
+    OpenStreetMap (.osm) XML dosyasını satır satır okuyan (parse eden) sınıftır.
+    SAX kütüphanesini kullanır, bu sayede büyük dosyaları belleği şişirmeden okur.
+    """
     def __init__(self, db):
         self.db = db
         self.curr_nodes = []
         self.tags = {}
         self.in_way = False
     def startElement(self, name, attrs):
+        """XML etiketi açıldığında (<node> veya <way>) çağrılır."""
         if name == "node":
             self.db.add_node(Node(attrs["id"], attrs["lat"], attrs["lon"]))
         elif name == "way":
@@ -97,19 +156,29 @@ class OSMHandler(sax.ContentHandler):
         elif name == "tag" and self.in_way:
             self.tags[attrs["k"]] = attrs["v"]
     def endElement(self, name):
+        """XML etiketi kapandığında çağrılır. Way bittiyse işlemeye gönderir."""
         if name == "way":
             self.process_way()
             self.in_way = False
     def process_way(self):
+        """
+        Okunan bir yolun özelliklerini inceler.
+        Eğer yol yürünebilir türdeyse veritabanına ekler.
+        """
         if 'highway' not in self.tags: return
         rtype = self.tags['highway']
-        if rtype not in SPEED_LIMITS: return
-        name = self.tags.get('name', 'Bilinmeyen Yol')
-        oneway = (self.tags.get('oneway') == 'yes') or (rtype == 'motorway')
+        if rtype in FORBIDDEN_TYPES or rtype not in WALKABLE_TYPES: return
+        name = self.tags.get('name', 'Yaya Yolu')
+        # YAYALAR İÇİN ÖNEMLİ: Tek yön kuralını iptal ediyoruz.
+        # oneway=False diyerek yolun iki yöne de gidilebilir olduğunu belirtiyoruz.
         for i in range(len(self.curr_nodes) - 1):
-            self.db.add_edge(self.curr_nodes[i], self.curr_nodes[i+1], rtype, name, oneway)
+            self.db.add_edge(self.curr_nodes[i], self.curr_nodes[i+1], rtype, name, oneway=False)
 
 def find_nearest_node(db, target_lat, target_lon):
+    """
+    Verilen koordinata (GPS) haritadaki en yakın düğümü (Node) bulur.
+    Navigasyonun başlayabilmesi için kullanıcının haritaya 'snap' edilmesi gerekir.
+    """
     best_node = None
     min_dist = float('inf')
     for node in db.nodes.values():
@@ -143,8 +212,15 @@ def check_reachability(start_node):
                 queue.append(edge.target)
                 
     return f"{count} nokta (Muhtemelen izole bir yol parçası)"
-
+# -------------------------------
+# Rota Algoritmaları (A*)
+# -------------------------------
 def astar(db, start_node, end_node):
+    """
+    A* (A-Star) Algoritması: Başlangıçtan bitişe en maliyetsiz (en hızlı/kısa) yolu bulur.
+    Maliyet fonksiyonu olarak zamanı (mesafe / hız) kullanır.
+    Heuristic (tahmin) olarak kuş uçuşu mesafeyi kullanır.
+    """
     open_set = []
     heapq.heappush(open_set, (0, start_node))
     came_from = {start_node: (None, None)}
@@ -159,11 +235,14 @@ def astar(db, start_node, end_node):
             neighbor = edge.target
             if neighbor not in cost_so_far or new_cost < cost_so_far[neighbor]:
                 cost_so_far[neighbor] = new_cost
-                priority = new_cost + (haversine_distance(neighbor.lat, neighbor.lon, end_node.lat, end_node.lon) / MAX_SPEED)
+                # Heuristic: Kalan mesafeyi yürüme hızına bölerek tahmini süre ekliyoruz
+                priority = new_cost + (haversine_distance(neighbor.lat, neighbor.lon, end_node.lat, end_node.lon) / WALKING_SPEED)
                 heapq.heappush(open_set, (priority, neighbor))
                 came_from[neighbor] = (current, edge)
     
     if end_node not in came_from: return None
+
+    # Rotayı geriye doğru takip ederek oluştur
     path = []
     curr = end_node
     while curr != start_node:
@@ -174,43 +253,114 @@ def astar(db, start_node, end_node):
     return path
 
 def generate_instructions(path):
-    instructions = []
-    if not path: return instructions
+    """
+    Rotayı analiz eder ve her adımı detaylı bir sözlük (dictionary) olarak döndürür.
+    Döndürülen yapı:
+    [
+      {
+        "text": "100m ilerleyin, Sağa dönün",
+        "location": {"lat": 39.92..., "lon": 32.85...},
+        "distance_meters": 100,
+        "action": "turn_right"
+      },
+      ...
+    ]
+    """
+    steps_data = []
+    if not path: return steps_data
     
     curr_name = path[0][1].name
     dist_accum = 0.0
-    instructions.append(f"Başlangıç: {curr_name}")
+    
+    # Başlangıç bilgisini ekle
+    start_node = path[0][0]
+    steps_data.append({
+        "step_id": 0,
+        "text": f"Başlangıç: {curr_name}",
+        "location": {"lat": start_node.lat, "lon": start_node.lon},
+        "action": "start",
+        "distance_meters": 0
+    })
+    
+    step_counter = 1
     
     for i, (node, edge) in enumerate(path):
         dist_accum += edge.distance
         next_edge = path[i+1][1] if i+1 < len(path) else None
         
-        if not next_edge or next_edge.name != curr_name:
+        # Karar noktası mı? (İsim değişti, tip değişti veya yol bitti)
+        if not next_edge or next_edge.name != curr_name or next_edge.type != edge.type:
+            
+            # 1. Ekstra Bilgileri Topla
+            extra_info = ""
+            if next_edge and next_edge.type == 'steps': extra_info = " (Dikkat: Merdiven!)"
+            elif edge.type == 'steps': extra_info = " (Merdiven bitimi)"
+            
+            # 2. Manevra Tipini Belirle
+            action_code = "continue"
             if next_edge:
                 b1 = calculate_bearing(node, edge.target)
                 b2 = calculate_bearing(edge.target, next_edge.target)
                 maneuver = get_turn_instruction(b2-b1)
-                turn_msg = f"{next_edge.name} yönüne {maneuver}"
+                turn_msg = f"{next_edge.name} yönüne {maneuver}{extra_info}"
+                
+                # Basit action kodları (Gözlük arayüzü için ikon seçmede işe yarar)
+                if "Sağa" in maneuver: action_code = "turn_right"
+                elif "Sola" in maneuver: action_code = "turn_left"
             else:
                 turn_msg = "Hedefe ulaştınız"
+                action_code = "finish"
             
+            # 3. Metni Oluştur
             d_str = f"{int(dist_accum*1000)}m" if dist_accum < 1 else f"{dist_accum:.2f}km"
-            instructions.append(f"{d_str} ilerleyin, {turn_msg}.")
+            full_text = f"{d_str} ilerleyin, {turn_msg}."
+            
+            # 4. SÖZLÜĞÜ OLUŞTUR VE LİSTEYE EKLE
+            step_dict = {
+                "step_id": step_counter,
+                "text": full_text,
+                "location": {"lat": edge.target.lat, "lon": edge.target.lon}, # Karar noktasının koordinatı
+                "distance_meters": int(dist_accum * 1000),
+                "action": action_code,
+                "road_name": next_edge.name if next_edge else "Varış"
+            }
+            steps_data.append(step_dict)
+            
+            # Değişkenleri sıfırla
             dist_accum = 0
+            step_counter += 1
             if next_edge: curr_name = next_edge.name
             
-    return instructions
+    return steps_data
 
 def export_geojson(path, filename="rota.json"):
+    """
+    Rotayı harita uygulamalarında (geojson.io vb.) görüntülemek için
+    GeoJSON formatında dosyaya kaydeder.
+    """
     coords = [[n.lon, n.lat] for n, _ in path]
-    coords.append([path[-1][1].target.lon, path[-1][1].target.lat])
-    geojson = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"stroke": "#ff0000", "stroke-width": 4}, "geometry": {"type": "LineString", "coordinates": coords}}]}
-    with open(filename, "w") as f: json.dump(geojson, f)
+    if path:
+        last_edge = path[-1][1]
+        coords.append([last_edge.target.lon, last_edge.target.lat])
+    
+    geojson = {
+        "type": "FeatureCollection", "features": [{"type": "Feature", 
+        "properties": {"stroke": "#0000FF", "stroke-width": 4}, 
+        "geometry": {"type": "LineString", "coordinates": coords}}]
+    }
+    
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(geojson, f, ensure_ascii=False, indent=2)
+        print(f"-> Dosya kaydedildi: {filename}")
+    except PermissionError:
+        print(f"HATA: {filename} dosyası açık! Kapatıp tekrar dene.")
 
 # -------------------------------
 # MAIN
 # -------------------------------
 if __name__ == "__main__":
+    # Parametre kontrolü
     if len(sys.argv) < 2:
         print("Kullanım: python3 nav_v3.py <harita.osm>")
         sys.exit(1)
@@ -223,10 +373,10 @@ if __name__ == "__main__":
     db.cleanup()
     print(f"Harita Hazır: {len(db.nodes)} aktif nokta.")
 
-    # -------------------------------------------------------------
-    # KOORDİNATLARI BURAYA GİRİN (Google Maps'ten sağ tıkla alın)
-    # -------------------------------------------------------------
-    # Örnek: İstanbul
+# ------------------------------------------------------------------
+# TEST KOORDİNATLARI (Senin Map.osm dosyan için uygun test verisi)
+# ------------------------------------------------------------------
+    
     S_LAT, S_LON = 39.92409, 32.845382  # Başlangıç
     E_LAT, E_LON = 39.921117, 32.852903  # Bitiş
 
@@ -250,11 +400,35 @@ if __name__ == "__main__":
     path = astar(db, start_node, end_node)
 
     if path:
-        print("\nBAŞARILI: Rota bulundu!")
-        export_geojson(path, "rota.json")
-        steps = generate_instructions(path)
-        for i, s in enumerate(steps, 1): print(f"{i}. {s}")
-        print("\nSonuç: rota.json dosyası oluşturuldu.")
+            print("\nBAŞARILI: Yaya rotası oluşturuldu!")
+            
+            # 1. GeoJSON Kaydı (Görsel Harita için)
+            export_geojson(path, "rota.json")
+            
+            # 2. Akıllı Talimatları Oluştur (Liste içinde Sözlükler)
+            steps_data = generate_instructions(path)
+            
+            # Ekrana Yazdır (Okunaklı özet)
+            print("-" * 50)
+            for step in steps_data: 
+                print(f"{step['step_id']}. {step['text']}")
+            print("-" * 50)
+                
+            # 3. Talimatları DETAYLI TEXT Dosyasına Kaydet
+            # Burası tam istediğin gibi "Dictionary Type" formatında kaydedecek.
+            txt_filename = "talimatlar.txt"
+            try:
+                with open(txt_filename, "w", encoding="utf-8") as f:
+                    # İstersen direkt JSON olarak da dökebilirsin ama 
+                    # okunabilir text istediğin için satır satır yazıyoruz.
+                    f.write(json.dumps(steps_data, ensure_ascii=False, indent=4))
+                    
+                print(f"-> Detaylı Veri Dosyası Kaydedildi: {txt_filename}")
+                print(f"   (İçeriğinde koordinatlar, aksiyon kodları ve mesafeler var)")
+                
+            except PermissionError:
+                print(f"HATA: {txt_filename} dosyasına yazılamadı (dosya açık olabilir).")
+
     else:
         print("\n--- HATA ANALİZİ ---")
         print("İki nokta arasında rota bulunamadı.")

@@ -1,0 +1,100 @@
+[
+    {
+        "step_id": 0,
+        "text": "Başlangıç: Şehit Gönenç Caddesi",
+        "location": {
+            "lat": 39.9241031,
+            "lon": 32.8452162
+        },
+        "action": "start",
+        "distance_meters": 0
+    },
+    {
+        "step_id": 1,
+        "text": "8m ilerleyin, Yaya Yolu yönüne Sağa Dönün.",
+        "location": {
+            "lat": 39.9240467,
+            "lon": 32.8451522
+        },
+        "distance_meters": 8,
+        "action": "turn_right",
+        "road_name": "Yaya Yolu"
+    },
+    {
+        "step_id": 2,
+        "text": "121m ilerleyin, Şehit Gönenç Caddesi yönüne Sola Keskin Dönün.",
+        "location": {
+            "lat": 39.9232599,
+            "lon": 32.8441792
+        },
+        "distance_meters": 121,
+        "action": "turn_left",
+        "road_name": "Şehit Gönenç Caddesi"
+    },
+    {
+        "step_id": 3,
+        "text": "125m ilerleyin, Şehit Gönenç Caddesi yönüne Sağa Dönün.",
+        "location": {
+            "lat": 39.9240102,
+            "lon": 32.8452347
+        },
+        "distance_meters": 125,
+        "action": "turn_right",
+        "road_name": "Şehit Gönenç Caddesi"
+    },
+    {
+        "step_id": 4,
+        "text": "136m ilerleyin, Şehit Gönenç Caddesi yönüne Düz Devam Edin.",
+        "location": {
+            "lat": 39.9249406,
+            "lon": 32.8462865
+        },
+        "distance_meters": 136,
+        "action": "continue",
+        "road_name": "Şehit Gönenç Caddesi"
+    },
+    {
+        "step_id": 5,
+        "text": "145m ilerleyin, Gazi Mustafa Kemal Bulvarı yönüne Sağa Dönün.",
+        "location": {
+            "lat": 39.9254588,
+            "lon": 32.8477125
+        },
+        "distance_meters": 145,
+        "action": "turn_right",
+        "road_name": "Gazi Mustafa Kemal Bulvarı"
+    },
+    {
+        "step_id": 6,
+        "text": "722m ilerleyin, Yaya Yolu yönüne Sola Keskin Dönün.",
+        "location": {
+            "lat": 39.9208164,
+            "lon": 32.8533392
+        },
+        "distance_meters": 722,
+        "action": "turn_left",
+        "road_name": "Yaya Yolu"
+    },
+    {
+        "step_id": 7,
+        "text": "13m ilerleyin, Gazi Mustafa Kemal Bulvarı yönüne Sola Keskin Dönün.",
+        "location": {
+            "lat": 39.920927,
+            "lon": 32.8533893
+        },
+        "distance_meters": 13,
+        "action": "turn_left",
+        "road_name": "Gazi Mustafa Kemal Bulvarı"
+    },
+    {
+        "step_id": 8,
+        "text": "36m ilerleyin, Hedefe ulaştınız.",
+        "location": {
+            "lat": 39.9210086,
+            "lon": 32.8529793
+        },
+        "distance_meters": 36,
+        "action": "finish",
+        "road_name": "Varış"
+    }
+]
