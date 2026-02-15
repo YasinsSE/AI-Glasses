@@ -4,7 +4,7 @@
 # Haritayı yükler, rota hesaplar ve navigasyon durumunu yönetir.
 # main loop'ta sürekli çağrılır.
 # flag tabanlı kontrol sistemi içerir.
-import osm_router
+from . import osm_router
 import json
 import math
 
