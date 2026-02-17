@@ -10,25 +10,25 @@ import math
 
 class NavigationSystem:
     def __init__(self, osm_map_path):
-        # 1. Haritayı belleğe yükle (Sadece 1 kere yapılır)
+        # 1. Map initiliaze
         self.db = osm_router.load_map(osm_map_path)
-        self.route_data = []  # Hesaplanan rota burada tutulacak
+        self.route_data = []  # Route buffer
         self.current_step_index = 0
-        self.is_navigating = False # C'deki Flag bu (0: Duruyor, 1: Aktif)
+        self.is_navigating = False # Flag (1: Active)
         
-        # Ayarlar
-        self.waypoint_threshold = 15.0  # 15 metre kalınca "Vardın" say
-        self.off_route_threshold = 40.0 # 40 metre saparsa uyar
+        # Settings
+        self.waypoint_threshold = 15.0  # Since distance is 15 m you finished your route 
+        self.off_route_threshold = 40.0 # After 40 m deviation warning
 
     def start_navigation(self, start_lat, start_lon, end_lat, end_lon):
         """
-        Rotayı hesaplar ve navigasyon modunu başlatır (Flag = 1 yapar).
+        Calculate the route and starts navigation (is_navigating = 1).
         """
-        print("[Nav] Rota hesaplanıyor...")
+        print("[Nav] Calculating route...")
         route, msg = osm_router.calculate_route(self.db, start_lat, start_lon, end_lat, end_lon)
         
         if not route:
-            print(f"[Nav] Hata: {msg}")
+            print(f"[Nav] Error: {msg}")
             self.is_navigating = False
             return False
         
@@ -36,36 +36,36 @@ class NavigationSystem:
         self.current_step_index = 0
         self.is_navigating = True
         
-        # Rotayı incelemek için JSON kaydet (Opsiyonel)
+        # Save the route as .json
         with open("aktif_rota.json", "w", encoding="utf-8") as f:
             json.dump(self.route_data, f, ensure_ascii=False, indent=2)
             
-        print(f"[Nav] Rota oluşturuldu! {len(route)} adım.")
-        print(f"[Nav] İlk Talimat: {route[0]['text']}")
+        print(f"[Nav] Route created! {len(route)} steps.")
+        print(f"[Nav] First Instruction: {route[0]['text']}")
         return True
 
     def check_progress(self, current_lat, current_lon):
         """
-        Bu fonksiyon sürekli döngüde (Loop) çağrılacak.
-        Kullanıcının anlık konumuna göre ne yapması gerektiğini söyler.
+        This funciton checks the user in the route or not
+        use in while.
         """
         if not self.is_navigating:
-            return "Navigasyon aktif değil."
+            return "Navigation is deactive."
 
-        # Hedefe ulaştık mı?
+        # Have we reached the target location?
         if self.current_step_index >= len(self.route_data):
             self.is_navigating = False
             return "ROTA_BITTI"
 
-        # Hedeflediğimiz sıradaki nokta (Waypoint)
+        # Our next step (Waypoint)
         target_step = self.route_data[self.current_step_index]
         t_lat = target_step['location']['lat']
         t_lon = target_step['location']['lon']
         
-        # O noktaya ne kadar kaldı?
+        # How far is next step?
         dist_to_target = osm_router.haversine_distance(current_lat, current_lon, t_lat, t_lon)
         
-        # --- DURUM KONTROLÜ ---
+        # --- STATE MACHINE ---
         
         # 1. Waypoint'e vardık mı?
         if dist_to_target < self.waypoint_threshold:
