@@ -1,6 +1,9 @@
 # main.py
 # Entry point — simulates a GPS loop feeding positions into NavigationSystem.
 # In production, replace the test_locations loop with your real GPS source.
+#
+# For usage there are two mode nav.navigate_to_nearest(current_location, "keyword") or nav.start_navigation(current_location, target_location)
+# For using GPS loop use nav.update(current_location) and it will give a feedback
 
 import logging
 import time
