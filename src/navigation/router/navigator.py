@@ -67,31 +67,29 @@ class NavigationSystem:
         
         # --- STATE MACHINE ---
         
-        # 1. Waypoint'e vardık mı?
+        # 1. Have we reached the waypoint?
         if dist_to_target < self.waypoint_threshold:
             self.current_step_index += 1
             
-            # Rota bitti mi tekrar kontrol et
+            # Check if the route finished
             if self.current_step_index >= len(self.route_data):
                 self.is_navigating = False
-                return "HEDEFE ULAŞTINIZ!"
+                return "You Reached the Target!"
             
-            # Yeni talimatı ver
+            # Give new instruction
             new_step = self.route_data[self.current_step_index]
-            return f"YENİ TALİMAT: {new_step['text']}"
+            return f"New Instruction: {new_step['text']}"
 
-        # 2. Rotadan saptık mı? (Basit kontrol)
-        # Eğer hedef noktaya olan mesafe, olması gerekenden çok fazlaysa sapmışızdır.
-        # (Daha gelişmiş versiyonda çizgiye olan uzaklık hesaplanır, şimdilik nokta uzaklığı yeterli)
-        # Bu basit bir off-route kontrolü, geliştirilebilir.
+        # 2. Are we still following the road? (Basic control)
+        # If the distance from the target, higher than the distance that out of range we are not in the route anymore.
         if dist_to_target > target_step['distance_meters'] + self.off_route_threshold:
-             # Burada flag'i kapatıp tekrar start_navigation çağırabilirsin (Rerouting)
-             return "DİKKAT: ROTADAN SAPTINIZ!"
+             #  Flag (0: Deactive) (Rerouting)
+             return "Attention: You out of the route!"
 
         # 3. Henüz varmadık, yola devam
-        return f"DEVAM: Hedefe {int(dist_to_target)}m kaldı. ({target_step['action']})"
+        return f"Contiune: Your distance to the target is {int(dist_to_target)}m. ({target_step['action']})"
 
-# --- ÖRNEK KULLANIM (MAIN LOOP SİMÜLASYONU) ---
+# --- ÖRNEK KULLANIM (MAIN LOOP SİMÜLASYONU) --- This part will change 
 if __name__ == "__main__":
     # 1. Sistem Başlatılıyor
     nav = NavigationSystem("map.osm") # Harita burada 1 kez yüklenir
@@ -118,7 +116,7 @@ if __name__ == "__main__":
             # ...
         ]
         
-        print("\n--- ÇEK SİSTEMİ DEVREDE ---")
+        print("\n--- Check System Active ---")
         for lat, lon in test_locations:
             gps_input = (lat, lon)
             status_msg = nav.check_progress(lat, lon)
