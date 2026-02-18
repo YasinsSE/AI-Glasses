@@ -5,7 +5,7 @@ import heapq
 import math
 import json
 
-# --- AYARLAR ---
+# --- Settings ---
 WALKING_SPEED = 5.0
 WALKABLE_TYPES = {
     'footway', 'pedestrian', 'path', 'steps', 'cycleway', 'living_street', 'track', 'crossing',
@@ -14,15 +14,16 @@ WALKABLE_TYPES = {
 }
 FORBIDDEN_TYPES = {'motorway', 'motorway_link', 'construction'}
 
-# --- MATEMATİK FONKSİYONLARI ---
+# --- Mathematical Functions ---
+# Distance calculation 
 def haversine_distance(lat1, lon1, lat2, lon2):
-    R = 6371000.0  # Metre cinsinden hassasiyet için 6371 km * 1000
+    R = 6371000.0  # 
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
     a = (math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2)
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
-
+# Direction angle finder
 def calculate_bearing(n1, n2):
     lat1, lon1 = math.radians(n1.lat), math.radians(n1.lon)
     lat2, lon2 = math.radians(n2.lat), math.radians(n2.lon)
@@ -30,16 +31,17 @@ def calculate_bearing(n1, n2):
     y = math.sin(d_lon) * math.cos(lat2)
     x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(d_lon)
     return (math.degrees(math.atan2(y, x)) + 360) % 360
-
+# Create angle to instruction
 def get_turn_instruction(diff):
     diff = (diff + 180) % 360 - 180
-    if diff > 45: return "Sağa Keskin Dönün"
-    elif diff > 10: return "Sağa Dönün"
-    elif diff < -45: return "Sola Keskin Dönün"
-    elif diff < -10: return "Sola Dönün"
-    return "Düz Devam Edin"
+    if diff > 45: return "Turn sharp right"
+    elif diff > 10: return "Turn right"
+    elif diff < -45: return "Turn sharp left"
+    elif diff < -10: return "Turn Left"
+    return "Go through"
 
-# --- SINIFLAR ---
+# --- Classes ---
+# It keeps roads distance, name and type. 
 class Edge:
     __slots__ = ['target', 'distance', 'time', 'name', 'type']
     def __init__(self, target, dist, r_type, name):
@@ -48,8 +50,8 @@ class Edge:
         self.name = name
         self.type = r_type
         factor = 2.0 if r_type == 'steps' else 1.0
-        self.time = (dist / (WALKING_SPEED * 1000 / 3600)) * factor # m/s cinsinden
-
+        self.time = (dist / (WALKING_SPEED * 1000 / 3600)) * factor 
+# Intersection or corner points
 class Node:
     __slots__ = ['id', 'lat', 'lon', 'edges']
     def __init__(self, nid, lat, lon):
@@ -57,7 +59,7 @@ class Node:
         self.lat = float(lat)
         self.lon = float(lon)
         self.edges = []
-
+# Map database (clean) 
 class RoutingDB:
     def __init__(self):
         self.nodes = {}
@@ -71,7 +73,7 @@ class RoutingDB:
         n2.edges.append(Edge(n1, d, r_type, name))
     def cleanup(self):
         self.nodes = {k: v for k, v in self.nodes.items() if len(v.edges) > 0}
-
+# .OSM file reader 
 class OSMHandler(sax.ContentHandler):
     def __init__(self, db):
         self.db = db
@@ -101,18 +103,18 @@ class OSMHandler(sax.ContentHandler):
         for i in range(len(self.curr_nodes) - 1):
             self.db.add_edge(self.curr_nodes[i], self.curr_nodes[i+1], rtype, name)
 
-# --- ANA FONKSİYONLAR ---
+# --- Main Functions ---
 def load_map(osm_file):
-    """Haritayı bir kez yükler ve veritabanını döndürür."""
-    print(f"[Router] Harita yükleniyor: {osm_file}")
+    """Loads map once and return database."""
+    print(f"[Router] Map downloading: {osm_file}")
     db = RoutingDB()
     parser = sax.make_parser()
     parser.setContentHandler(OSMHandler(db))
     parser.parse(osm_file)
     db.cleanup()
-    print(f"[Router] Harita hazır: {len(db.nodes)} nokta.")
+    print(f"[Router] Maps ready: {len(db.nodes)} nodes.")
     return db
-
+# Finds starting node
 def find_nearest_node(db, lat, lon):
     best_node = None
     min_dist = float('inf')
@@ -125,16 +127,15 @@ def find_nearest_node(db, lat, lon):
 
 def calculate_route(db, start_lat, start_lon, end_lat, end_lon):
     """
-    Verilen koordinatlar için rota hesaplar ve JSON formatında (liste) döndürür.
-    Dosyaya yazmaz, veriyi return eder.
+    It calculates route for given coordinates and returns list (as .JSON)
     """
     start_node, d1 = find_nearest_node(db, start_lat, start_lon)
     end_node, d2 = find_nearest_node(db, end_lat, end_lon)
 
     if not start_node or not end_node:
-        return None, "Harita kapsamı dışında"
+        return None, "Out of range"
 
-    # A* Algoritması
+    # A* Algorithm
     open_set = []
     heapq.heappush(open_set, (0, start_node))
     came_from = {start_node: (None, None)}
@@ -153,9 +154,9 @@ def calculate_route(db, start_lat, start_lon, end_lat, end_lon):
                 heapq.heappush(open_set, (priority, neighbor))
                 came_from[neighbor] = (current, edge)
     
-    if end_node not in came_from: return None, "Rota bulunamadı"
+    if end_node not in came_from: return None, "Route cannot found"
 
-    # Rotayı oluştur
+    # Create the route
     path = []
     curr = end_node
     while curr != start_node:
@@ -164,16 +165,16 @@ def calculate_route(db, start_lat, start_lon, end_lat, end_lon):
         curr = parent
     path.reverse()
 
-    # Talimatları (JSON yapısı) oluştur
+    # Create Instructions
     steps_data = []
     curr_name = path[0][1].name
     dist_accum = 0.0
     step_counter = 1
     
-    # Başlangıç adımı
+    # First step
     steps_data.append({
         "step_id": 0,
-        "text": f"Navigasyon başlıyor. Konum: {curr_name}",
+        "text": f"Navigation starting. Location: {curr_name}",
         "location": {"lat": start_node.lat, "lon": start_node.lon},
         "action": "start",
         "distance_meters": 0
@@ -185,20 +186,20 @@ def calculate_route(db, start_lat, start_lon, end_lat, end_lon):
         
         if not next_edge or next_edge.name != curr_name or next_edge.type != edge.type:
             action_code = "continue"
-            turn_msg = "Düz devam edin"
+            turn_msg = "Go through"
             
             if next_edge:
                 b1 = calculate_bearing(node, edge.target)
                 b2 = calculate_bearing(edge.target, next_edge.target)
                 maneuver = get_turn_instruction(b2-b1)
                 turn_msg = f"{maneuver}"
-                if "Sağa" in maneuver: action_code = "turn_right"
-                elif "Sola" in maneuver: action_code = "turn_left"
+                if "right" in maneuver: action_code = "turn_right"
+                elif "left" in maneuver: action_code = "turn_left"
             else:
-                turn_msg = "Hedefe ulaştınız"
+                turn_msg = "You have reached the target"
                 action_code = "finish"
 
-            full_text = f"{int(dist_accum)}m sonra {turn_msg}."
+            full_text = f"after {int(dist_accum)}m {turn_msg}."
             
             steps_data.append({
                 "step_id": step_counter,
