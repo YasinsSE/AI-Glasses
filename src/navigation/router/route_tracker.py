@@ -115,8 +115,14 @@ class RouteTracker:
             )
 
         # 2. Off-route check
-        if dist > target.distance_meters + self.config.off_route_threshold_m:
-            return ProgressResult(
+        if dist > self.config.off_route_threshold_m and self._step_index > 0:
+            prev_step = self._route[self._step_index - 1]
+            dist_from_prev = haversine_distance(
+                position.lat, position.lon,
+                prev_step.location.lat, prev_step.location.lon,
+            )
+            if dist_from_prev > self.config.off_route_threshold_m:
+                return ProgressResult(
                 status=RouteStatus.OFF_ROUTE,
                 message="You are off the route. Recalculating may be needed.",
                 distance_to_next=dist,
