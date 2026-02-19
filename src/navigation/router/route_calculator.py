@@ -27,11 +27,14 @@ def _find_nearest_node(db: RoutingDB, coord: Coord) -> Tuple[Optional[Node], flo
     return best_node, min_dist
 
 
-def _reconstruct_path(came_from: dict, start: Node, end: Node):
-    """Walk came_from back from end to start and return the ordered path."""
+def _reconstruct_path(came_from, start, end):
     path = []
     curr = end
+    visited_nodes: set = set()                       # ← YENİ
     while curr != start:
+        if curr in visited_nodes:                    # ← YENİ
+            raise RuntimeError("Cycle detected...") # ← YENİ
+        visited_nodes.add(curr)                      # ← YENİ
         parent, edge = came_from[curr]
         path.append((parent, edge))
         curr = parent
@@ -135,14 +138,19 @@ class RouteCalculator:
             return None, "Origin and destination map to the same node."
 
         # A* search
+        counter = 0                                          # 
         open_set: list = []
-        heapq.heappush(open_set, (0.0, start_node))
+        heapq.heappush(open_set, (0.0, counter, start_node)) # 
         came_from: dict = {start_node: (None, None)}
         cost_so_far: dict = {start_node: 0.0}
+        visited: set = set()                                 # 
         speed_ms = self.config.walking_speed_kmh * 1000 / 3600
-
+        
         while open_set:
-            _, current = heapq.heappop(open_set)
+            _, _, current = heapq.heappop(open_set)          # 
+            if current in visited:                           # 
+                continue                                     # 
+            visited.add(current)                             # 
             if current == end_node:
                 break
             for edge in current.edges:
@@ -150,11 +158,9 @@ class RouteCalculator:
                 neighbor = edge.target
                 if neighbor not in cost_so_far or new_cost < cost_so_far[neighbor]:
                     cost_so_far[neighbor] = new_cost
-                    heuristic = haversine_distance(
-                        neighbor.lat, neighbor.lon,
-                        end_node.lat, end_node.lon,
-                    ) / speed_ms
-                    heapq.heappush(open_set, (new_cost + heuristic, neighbor))
+                    heuristic = haversine_distance(...) / speed_ms
+                    counter += 1                             # ← YENİ
+                    heapq.heappush(open_set, (new_cost + heuristic, counter, neighbor)) # ← counter eklendi
                     came_from[neighbor] = (current, edge)
 
         if end_node not in came_from:
