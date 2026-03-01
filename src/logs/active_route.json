@@ -1,0 +1,171 @@
+{
+  "saved_at": "2026-03-01T16:31:21.309758",
+  "step_count": 15,
+  "steps": [
+    {
+      "step_id": 0,
+      "text": "Navigation starting. You are on: Onur Sokak",
+      "location": {
+        "lat": 39.931459,
+        "lon": 32.8422106
+      },
+      "action": "start",
+      "distance_meters": 0,
+      "road_name": "Onur Sokak"
+    },
+    {
+      "step_id": 1,
+      "text": "After 737 m — Turn sharp right.",
+      "location": {
+        "lat": 39.9258214,
+        "lon": 32.8465587
+      },
+      "action": "turn_right",
+      "distance_meters": 737,
+      "road_name": "Unnamed road"
+    },
+    {
+      "step_id": 2,
+      "text": "After 153 m — Turn sharp left.",
+      "location": {
+        "lat": 39.9249049,
+        "lon": 32.8452056
+      },
+      "action": "turn_left",
+      "distance_meters": 153,
+      "road_name": "Süleyman Bey Sokak"
+    },
+    {
+      "step_id": 3,
+      "text": "After 59 m — Turn sharp right.",
+      "location": {
+        "lat": 39.9244955,
+        "lon": 32.8456618
+      },
+      "action": "turn_right",
+      "distance_meters": 59,
+      "road_name": "Şehit Gönenç Caddesi"
+    },
+    {
+      "step_id": 4,
+      "text": "After 66 m — Turn right.",
+      "location": {
+        "lat": 39.9240467,
+        "lon": 32.8451522
+      },
+      "action": "turn_right",
+      "distance_meters": 66,
+      "road_name": "Unnamed road"
+    },
+    {
+      "step_id": 5,
+      "text": "After 121 m — Turn sharp left.",
+      "location": {
+        "lat": 39.9232599,
+        "lon": 32.8441792
+      },
+      "action": "turn_left",
+      "distance_meters": 121,
+      "road_name": "Şehit Gönenç Caddesi"
+    },
+    {
+      "step_id": 6,
+      "text": "After 125 m — Turn right.",
+      "location": {
+        "lat": 39.9240102,
+        "lon": 32.8452347
+      },
+      "action": "turn_right",
+      "distance_meters": 125,
+      "road_name": "Şehit Gönenç Caddesi"
+    },
+    {
+      "step_id": 7,
+      "text": "After 136 m — Go straight.",
+      "location": {
+        "lat": 39.9249406,
+        "lon": 32.8462865
+      },
+      "action": "continue",
+      "distance_meters": 136,
+      "road_name": "Şehit Gönenç Caddesi"
+    },
+    {
+      "step_id": 8,
+      "text": "After 145 m — Turn right.",
+      "location": {
+        "lat": 39.9254588,
+        "lon": 32.8477125
+      },
+      "action": "turn_right",
+      "distance_meters": 145,
+      "road_name": "Gazi Mustafa Kemal Bulvarı"
+    },
+    {
+      "step_id": 9,
+      "text": "After 333 m — Turn sharp right.",
+      "location": {
+        "lat": 39.9229846,
+        "lon": 32.8498475
+      },
+      "action": "turn_right",
+      "distance_meters": 333,
+      "road_name": "Fevzi Çakmak 2. Sokak"
+    },
+    {
+      "step_id": 10,
+      "text": "After 252 m — Turn sharp right.",
+      "location": {
+        "lat": 39.9211767,
+        "lon": 32.848056
+      },
+      "action": "turn_right",
+      "distance_meters": 252,
+      "road_name": "Kumrular Sokak"
+    },
+    {
+      "step_id": 11,
+      "text": "After 86 m — Turn sharp right.",
+      "location": {
+        "lat": 39.9215884,
+        "lon": 32.8471901
+      },
+      "action": "turn_right",
+      "distance_meters": 86,
+      "road_name": "Necatibey Caddesi"
+    },
+    {
+      "step_id": 12,
+      "text": "After 398 m — Turn sharp left.",
+      "location": {
+        "lat": 39.92417,
+        "lon": 32.8503351
+      },
+      "action": "turn_left",
+      "distance_meters": 398,
+      "road_name": "Yesilirmak Sokak"
+    },
+    {
+      "step_id": 13,
+      "text": "After 226 m — Turn right.",
+      "location": {
+        "lat": 39.9251244,
+        "lon": 32.8479965
+      },
+      "action": "turn_right",
+      "distance_meters": 226,
+      "road_name": "Gazi Mustafa Kemal Bulvarı"
+    },
+    {
+      "step_id": 14,
+      "text": "After 12 m — You have reached your destination.",
+      "location": {
+        "lat": 39.9252281,
+        "lon": 32.8479343
+      },
+      "action": "finish",
+      "distance_meters": 12,
+      "road_name": null
+    }
+  ]
+}

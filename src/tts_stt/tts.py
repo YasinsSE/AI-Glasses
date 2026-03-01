@@ -1,29 +1,44 @@
-import pyttsx3
+import subprocess
+import sys
+import traceback
+import threading
+import queue
+import os
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from navigation.router.navigator import NavigationSystem
+from navigation.router.models import Coord
+from navigation.router.nav_config import NavConfig
 
+_tts_queue = queue.Queue()
 
-def init_tts():
-    engine = pyttsx3.init()
-    engine.setProperty("rate", 165)
-    engine.setProperty("volume", 1.0)
-
-    # İsteğe bağlı: mümkünse daha iyi bir voice seç
-    preferred = ["Samantha", "Victoria", "Ava", "Moira", "Karen", "Tessa", "Kathy"]
-    for v in engine.getProperty("voices"):
-        if any(p.lower() in (v.name or "").lower() for p in preferred):
-            engine.setProperty("voice", v.id)
+def _tts_worker():
+    while True:
+        text = _tts_queue.get()
+        if text is None:
             break
+        script = (
+            "import pyttsx3\n"
+            "engine = pyttsx3.init()\n"
+            "engine.setProperty('rate', 150)\n"
+            f"engine.say({repr(text)})\n"
+            "engine.runAndWait()"
+        )
+        try:
+            subprocess.run([sys.executable, "-c", script])
+        except Exception as e:
+            print(f"TTS hatası: {e}")
+        finally:
+            _tts_queue.task_done()
 
-    return engine
+_tts_thread = threading.Thread(target=_tts_worker, daemon=True)
+_tts_thread.start()
 
-
-def speak(engine, text: str):
+def speak(text: str):
     text = (text or "").strip()
-    if not text:
-        return
-    engine.say(text)
-    engine.runAndWait()
+    if text:
+        _tts_queue.put(text)
 
 
 def parse_floats(parts, count: int):
@@ -33,12 +48,11 @@ def parse_floats(parts, count: int):
 
 
 def main():
-    nav = NavigationSystem("navigation/router/map.osm")
-
-    tts = init_tts()
+    config = NavConfig(log_dir="logs")
+    nav = NavigationSystem("navigation/router/map.osm", config=config)
 
     print("Komutlar:")
-    print("  start <start_lat> <start_lon> <end_lat> <end_lon>")
+    print("  start <lat> <lon> <poi_tipi>")
     print("  gps <lat> <lon>")
     print("  quit")
 
@@ -56,28 +70,40 @@ def main():
 
         try:
             if cmd == "start":
-                s_lat, s_lon, e_lat, e_lon = parse_floats(args, 4)
-                ok = nav.start_navigation(s_lat, s_lon, e_lat, e_lon)
-                msg = "Rota oluşturuldu." if ok else "Rota oluşturulamadı."
+                s_lat, s_lon = parse_floats(args[:2], 2)
+                poi_type = args[2] if len(args) > 2 else "pharmacy"
+                success, msg, _ = nav.navigate_to_nearest(
+                    Coord(lat=s_lat, lon=s_lon),
+                    poi_type
+                )
                 print("[TTS]", msg)
-                speak(tts, msg)
+                speak(msg)
+
+                if not success:
+                    print("[NAV]", "Rota hesaplanamadı.")
+                    continue
 
             elif cmd == "gps":
                 lat, lon = parse_floats(args, 2)
-                status = nav.check_progress(lat, lon)
-                print("[NAV]", status)
-                speak(tts, status)
+                result = nav.update(Coord(lat=lat, lon=lon))
+                out = f"{result.status}: {result.message}"
+                print("[NAV]", out)
+                speak(result.message)
 
             else:
                 msg = "Bilinmeyen komut."
                 print("[TTS]", msg)
-                speak(tts, msg)
+                ##speak(msg)
 
         except Exception as e:
             err = f"Hata: {e}"
+            print(traceback.format_exc())
             print("[ERR]", err)
-            speak(tts, err)
-
+            ##speak(err)
+            
+    _tts_queue.join()       # Kuyruktaki tüm seslerin bitmesini bekle
+    _tts_queue.put(None)    # Worker thread'e dur sinyali gönder
+    _tts_thread.join(timeout=5)
 
 if __name__ == "__main__":
     main()

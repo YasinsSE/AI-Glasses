@@ -8,8 +8,8 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from models import RouteStep, ProgressResult
-from nav_config import NavConfig
+from .models import RouteStep, ProgressResult
+from .nav_config import NavConfig
 
 # Standard Python logger — configure at app entry point if needed
 logger = logging.getLogger(__name__)

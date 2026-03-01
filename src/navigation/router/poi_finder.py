@@ -13,8 +13,8 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from models import Coord
-from geo_utils import haversine_distance
+from .models import Coord
+from .geo_utils import haversine_distance
 
 logger = logging.getLogger(__name__)
 
