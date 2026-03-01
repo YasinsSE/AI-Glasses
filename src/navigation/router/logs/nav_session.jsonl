@@ -1,0 +1,9 @@
+{"timestamp": "2026-03-01T14:22:45.213376", "lat": 39.92409, "lon": 32.845382, "status": "waypoint_hit", "message": "After 8 m — Turn right.", "distance_to_next": 0.0}
+{"timestamp": "2026-03-01T14:22:45.272353", "lat": 39.9240467, "lon": 32.8451522, "status": "waypoint_hit", "message": "After 121 m — Turn sharp left.", "distance_to_next": 0.0}
+{"timestamp": "2026-03-01T14:22:45.323522", "lat": 39.9232599, "lon": 32.8441792, "status": "waypoint_hit", "message": "After 125 m — Turn right.", "distance_to_next": 0.0}
+{"timestamp": "2026-03-01T14:22:45.374556", "lat": 39.9240102, "lon": 32.8452347, "status": "waypoint_hit", "message": "After 136 m — Go straight.", "distance_to_next": 0.0}
+{"timestamp": "2026-03-01T14:22:45.445078", "lat": 39.9249406, "lon": 32.8462865, "status": "waypoint_hit", "message": "After 145 m — Turn right.", "distance_to_next": 0.0}
+{"timestamp": "2026-03-01T14:22:45.496367", "lat": 39.9254588, "lon": 32.8477125, "status": "waypoint_hit", "message": "After 139 m — You have reached your destination.", "distance_to_next": 0.0}
+{"timestamp": "2026-03-01T14:22:45.547548", "lat": 39.9208164, "lon": 32.8533392, "status": "off_route", "message": "You are off the route. Recalculating may be needed.", "distance_to_next": 574.3669170682132}
+{"timestamp": "2026-03-01T14:22:45.599238", "lat": 39.920927, "lon": 32.8533893, "status": "off_route", "message": "You are off the route. Recalculating may be needed.", "distance_to_next": 569.2999651224233}
+{"timestamp": "2026-03-01T14:22:45.650393", "lat": 39.9210086, "lon": 32.8529793, "status": "off_route", "message": "You are off the route. Recalculating may be needed.", "distance_to_next": 537.3382121074694}
