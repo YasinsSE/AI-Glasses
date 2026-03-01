@@ -5,10 +5,10 @@
 import heapq
 from typing import List, Optional, Tuple
 
-from models import Coord, RouteStep
-from geo_utils import haversine_distance, calculate_bearing, get_turn_instruction
-from nav_config import NavConfig
-from osm_parser import RoutingDB, Node
+from .models import Coord, RouteStep
+from .geo_utils import haversine_distance, calculate_bearing, get_turn_instruction
+from .nav_config import NavConfig
+from .osm_parser import RoutingDB, Node
 
 
 # ---------------------------------------------------------------------------
