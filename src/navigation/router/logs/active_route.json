@@ -1,0 +1,83 @@
+{
+  "saved_at": "2026-03-01T14:22:45.213376",
+  "step_count": 7,
+  "steps": [
+    {
+      "step_id": 0,
+      "text": "Navigation starting. You are on: Şehit Gönenç Caddesi",
+      "location": {
+        "lat": 39.9241031,
+        "lon": 32.8452162
+      },
+      "action": "start",
+      "distance_meters": 0,
+      "road_name": "Şehit Gönenç Caddesi"
+    },
+    {
+      "step_id": 1,
+      "text": "After 8 m — Turn right.",
+      "location": {
+        "lat": 39.9240467,
+        "lon": 32.8451522
+      },
+      "action": "turn_right",
+      "distance_meters": 8,
+      "road_name": "Unnamed road"
+    },
+    {
+      "step_id": 2,
+      "text": "After 121 m — Turn sharp left.",
+      "location": {
+        "lat": 39.9232599,
+        "lon": 32.8441792
+      },
+      "action": "turn_left",
+      "distance_meters": 121,
+      "road_name": "Şehit Gönenç Caddesi"
+    },
+    {
+      "step_id": 3,
+      "text": "After 125 m — Turn right.",
+      "location": {
+        "lat": 39.9240102,
+        "lon": 32.8452347
+      },
+      "action": "turn_right",
+      "distance_meters": 125,
+      "road_name": "Şehit Gönenç Caddesi"
+    },
+    {
+      "step_id": 4,
+      "text": "After 136 m — Go straight.",
+      "location": {
+        "lat": 39.9249406,
+        "lon": 32.8462865
+      },
+      "action": "continue",
+      "distance_meters": 136,
+      "road_name": "Şehit Gönenç Caddesi"
+    },
+    {
+      "step_id": 5,
+      "text": "After 145 m — Turn right.",
+      "location": {
+        "lat": 39.9254588,
+        "lon": 32.8477125
+      },
+      "action": "turn_right",
+      "distance_meters": 145,
+      "road_name": "Gazi Mustafa Kemal Bulvarı"
+    },
+    {
+      "step_id": 6,
+      "text": "After 139 m — You have reached your destination.",
+      "location": {
+        "lat": 39.9243167,
+        "lon": 32.8483861
+      },
+      "action": "finish",
+      "distance_meters": 139,
+      "road_name": null
+    }
+  ]
+}

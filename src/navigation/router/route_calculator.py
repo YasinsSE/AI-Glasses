@@ -158,7 +158,7 @@ class RouteCalculator:
                 neighbor = edge.target
                 if neighbor not in cost_so_far or new_cost < cost_so_far[neighbor]:
                     cost_so_far[neighbor] = new_cost
-                    heuristic = haversine_distance(...) / speed_ms
+                    heuristic = haversine_distance(neighbor.lat, neighbor.lon, end_node.lat, end_node.lon) / speed_ms
                     counter += 1                             # ← YENİ
                     heapq.heappush(open_set, (new_cost + heuristic, counter, neighbor)) # ← counter eklendi
                     came_from[neighbor] = (current, edge)

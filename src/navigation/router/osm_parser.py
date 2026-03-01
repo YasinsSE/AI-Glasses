@@ -164,7 +164,8 @@ def load_map(osm_file: str, config: Optional[NavConfig] = None) -> RoutingDB:
     db = RoutingDB()
     parser = sax.make_parser()
     parser.setContentHandler(OSMHandler(db, config))
-    parser.parse(osm_file)
+    with open(osm_file, 'r', encoding='utf-8') as f:
+        parser.parse(f)
     db.cleanup()
     print(f"[OSMParser] Ready — {len(db.nodes)} routable nodes.")
     return db
