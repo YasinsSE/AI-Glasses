@@ -5,8 +5,8 @@
 import xml.sax as sax
 from typing import Dict, List, Optional
 
-from geo_utils import haversine_distance
-from nav_config import NavConfig, WALKABLE_TYPES, FORBIDDEN_TYPES
+from .geo_utils import haversine_distance
+from .nav_config import NavConfig, WALKABLE_TYPES, FORBIDDEN_TYPES
 
 
 # ---------------------------------------------------------------------------
