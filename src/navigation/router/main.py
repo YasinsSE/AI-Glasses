@@ -8,9 +8,9 @@
 import logging
 import time
 
-from models import Coord, RouteStatus
-from nav_config import NavConfig
-from navigator import NavigationSystem
+from .models import Coord, RouteStatus
+from .nav_config import NavConfig
+from .navigator import NavigationSystem
 
 # ------------------------------------------------------------------
 # Logging setup — configure once here, all modules inherit
