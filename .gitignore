@@ -39,3 +39,6 @@ venv/
 data/
 datasets/
 
+*.wav
+*.mp3
+aktif_rota.json
