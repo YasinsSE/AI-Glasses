@@ -10,10 +10,10 @@ import json
 import os
 import queue
 import threading
-from pathlib import Path
-
 import pyaudio
+from pathlib import Path
 from vosk import Model, KaldiRecognizer, SetLogLevel
+from slm_classifier import SLMClassifier
 
 # Vosk log seviyesini kıs  (-1 = sessiz)
 SetLogLevel(-1)
@@ -62,6 +62,7 @@ class STTEngine:
 
         self._audio = pyaudio.PyAudio()
         self._running = False
+        self._slm = SLMClassifier()
         print("[STT] Hazır ✓")
 
     # ──────────────────────────────────────────────────────────────────────
@@ -126,17 +127,12 @@ class STTEngine:
     # SÜREKLİ DİNLEME (arka plan thread)
     # ──────────────────────────────────────────────────────────────────────
 
-    def listen_continuous(self, callback, stop_words: list[str] | None = None):
+    def listen_continuous(self, callback):
         """
-        Sürekli dinle, tanınan her cümleyi callback'e gönder.
+        Sürekli dinle, tanınan her cümleyi SLM ile sınıflandırıp callback'e gönder.
 
-        Parameters
-        ----------
-        callback   : fn(text: str) -> None
-        stop_words : Bu kelimelerden biri gelirse dinlemeyi durdur.
-                     Örn: ["dur", "kapat", "çıkış"]
+        callback : fn(text: str, intent: str, confidence: float) -> None
         """
-        stop_words = [w.lower() for w in (stop_words or ["çıkış", "kapat"])]
         self._running = True
 
         stream = self._audio.open(
@@ -148,7 +144,7 @@ class STTEngine:
         )
 
         recognizer = KaldiRecognizer(self.model, SAMPLE_RATE)
-        print("[STT] Sürekli dinleme başladı. Durdurmak için:", stop_words)
+        print("[STT] Sürekli dinleme başladı.")
 
         try:
             while self._running:
@@ -161,14 +157,15 @@ class STTEngine:
                     if not text:
                         continue
 
-                    print(f"[STT] \"{text}\"")
+                    intent, conf = self._slm.predict(text)
+                    print(f'[STT] "{text}" → [{intent}, {conf:.2f}]')
 
-                    if any(sw in text.lower() for sw in stop_words):
-                        print("[STT] Durdurma komutu algılandı.")
+                    if intent == "system_command":
+                        print("[STT] Sistem komutu algılandı, durduruluyor.")
                         self._running = False
                         break
 
-                    callback(text)
+                    callback(text, intent, conf)
 
         finally:
             stream.stop_stream()
@@ -192,8 +189,10 @@ if __name__ == "__main__":
     text = stt.listen(timeout_sec=10)
     print(f"Sonuç: {text}\n")
 
-    print("=== Sürekli dinleme testi ===")
+    print("=== Sürekli dinleme testi (SLM aktif) ===")
     print("('çıkış' veya 'kapat' diyerek durdurun)\n")
-    stt.listen_continuous(lambda t: print(f"  → {t}"))
+    stt.listen_continuous(
+        callback=lambda text, intent, conf: print(f"  → [{intent}] {text} ({conf:.2f})")
+    )
 
     stt.close()
