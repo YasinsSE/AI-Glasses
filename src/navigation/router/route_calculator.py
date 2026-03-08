@@ -5,10 +5,10 @@
 import heapq
 from typing import List, Optional, Tuple
 
-from models import Coord, RouteStep
-from geo_utils import haversine_distance, calculate_bearing, get_turn_instruction
-from nav_config import NavConfig
-from osm_parser import RoutingDB, Node
+from .models import Coord, RouteStep
+from .geo_utils import haversine_distance, calculate_bearing, get_turn_instruction
+from .nav_config import NavConfig
+from .osm_parser import RoutingDB, Node
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +158,7 @@ class RouteCalculator:
                 neighbor = edge.target
                 if neighbor not in cost_so_far or new_cost < cost_so_far[neighbor]:
                     cost_so_far[neighbor] = new_cost
-                    heuristic = haversine_distance(...) / speed_ms
+                    heuristic = haversine_distance(neighbor.lat, neighbor.lon, end_node.lat, end_node.lon) / speed_ms
                     counter += 1                             # ← YENİ
                     heapq.heappush(open_set, (new_cost + heuristic, counter, neighbor)) # ← counter eklendi
                     came_from[neighbor] = (current, edge)
