@@ -5,13 +5,13 @@
 import logging
 from typing import Optional, Tuple, List
 
-from models import Coord, ProgressResult, RouteStatus
-from nav_config import NavConfig
-from osm_parser import RoutingDB, load_map
-from route_calculator import RouteCalculator
-from route_tracker import RouteTracker
-from nav_logger import NavLogger
-from poi_finder import POIFinder, POIResult
+from .models import Coord, ProgressResult, RouteStatus
+from .nav_config import NavConfig
+from .osm_parser import RoutingDB, load_map
+from .route_calculator import RouteCalculator
+from .route_tracker import RouteTracker
+from .nav_logger import NavLogger
+from .poi_finder import POIFinder, POIResult
 
 logger = logging.getLogger(__name__)
 
