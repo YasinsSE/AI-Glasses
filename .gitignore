@@ -43,3 +43,7 @@ datasets/
 *.mp3
 aktif_rota.json
 .DS_Store
+
+stt/tts
+
+*.pkl
