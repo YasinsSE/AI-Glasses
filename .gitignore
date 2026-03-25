@@ -57,3 +57,4 @@ tts_stt/my_custom_slm/model.safetensors
 
 # Vosk model (too large for git)
 vosk-model-small-tr-0.3/
+vosk-model-small-tr-0.3.zip
