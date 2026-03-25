@@ -63,3 +63,11 @@ After completing the research and literature review, the project will proceed to
 - System-level evaluation through controlled indoor and outdoor testing
 
 The final objective is a portable, locally operating assistive device capable of perceiving the environment, interpreting scene structure, and guiding the user safely through audio feedback.
+
+## SLM Model Kurulumu
+
+Base model boyutu büyük olduğu için repoya dahil edilmemiştir.
+İlk kurulumda aşağıdaki komutu çalıştırın:
+
+pip install huggingface_hub
+huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct model.safetensors --local-dir src/tts_stt/my_custom_slm/

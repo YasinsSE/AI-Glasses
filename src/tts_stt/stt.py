@@ -12,6 +12,8 @@ import time
 import queue
 import threading
 import pyaudio
+import zipfile
+import urllib.request
 from pathlib import Path
 from vosk import Model, KaldiRecognizer, SetLogLevel
 from mlx_lm import load, generate  # MLX kütüphaneleri (Apple Silicon)
@@ -31,11 +33,33 @@ SetLogLevel(-1)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]          # ai-glasses-1/
 _DEFAULT_MODEL = _PROJECT_ROOT / "vosk-model-small-tr-0.3"
+VOSK_MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-tr-0.3.zip"
 
 SAMPLE_RATE = 16_000
 CHUNK_SIZE = 4096
 CHANNELS = 1
 FORMAT = pyaudio.paInt16
+
+# ──────────────────────────────────────────────────────────────────────────────
+# VOSK MODEL OTOMATİK İNDİRME
+# ──────────────────────────────────────────────────────────────────────────────
+
+def ensure_vosk_model(model_dir: Path) -> Path:
+    """Model yoksa indir ve çıkart, yolunu döndür."""
+    if model_dir.is_dir():
+        return model_dir
+
+    zip_path = model_dir.with_suffix(".zip")
+    print(f"Vosk model bulunamadı, indiriliyor: {VOSK_MODEL_URL}")
+    urllib.request.urlretrieve(VOSK_MODEL_URL, str(zip_path))
+
+    print("Zip açılıyor...")
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        zf.extractall(str(model_dir.parent))
+
+    zip_path.unlink()
+    print(f"Model hazır: {model_dir}")
+    return model_dir
 
 # ──────────────────────────────────────────────────────────────────────────────
 # MLX TABANLI SLM SINIFLANDIRICI
@@ -109,18 +133,13 @@ class STTEngine:
         model_path : str | None
             Vosk model klasör yolu.
             Verilmezse proje kökündeki vosk-model-small-tr-0.3 kullanılır.
+            Model bulunamazsa otomatik indirilir.
         """
-        path = model_path or str(_DEFAULT_MODEL)
-
-        if not os.path.isdir(path):
-            raise FileNotFoundError(
-                f"Vosk model bulunamadı: {path}\n"
-                "İndirmek için: "
-                "wget https://alphacephei.com/vosk/models/vosk-model-small-tr-0.3.zip && unzip ..."
-            )
+        path = Path(model_path) if model_path else _DEFAULT_MODEL
+        path = ensure_vosk_model(path)
 
         print(f"[STT] Model yükleniyor: {path}")
-        self.model = Model(path)
+        self.model = Model(str(path))
         self.recognizer = KaldiRecognizer(self.model, SAMPLE_RATE)
         self.recognizer.SetWords(True)
 
