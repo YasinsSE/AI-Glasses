@@ -2,7 +2,7 @@
 
 ALAS is a wearable edge-AI system designed to assist visually impaired individuals during outdoor pedestrian navigation. It delivers continuous environmental awareness and audio-guided routing through fully local, real-time processing — no internet connection required at runtime.
 
-The system integrates an RGB-D camera, lightweight semantic perception via YOLOv8, depth-based obstacle analysis, OSM-based offline navigation, and a voice I/O interface, all running on an NVIDIA Jetson Nano embedded compute unit.
+The system integrates an RGB camera, lightweight semantic perception via U-Net, OSM-based offline navigation, and a voice I/O interface, all running on an NVIDIA Jetson Nano embedded compute unit.
 
 ---
 
@@ -37,7 +37,7 @@ The physical foundation of the device, centered on the **NVIDIA Jetson Nano** fo
 Transforms raw sensor data into actionable environmental intelligence.
 
 - **Image Preprocessing:** RGB frame resizing, normalization, and noise filtering targeting ≤20 ms preprocessing latency
-- **Semantic Perception:** YOLOv8-based object detection and scene segmentation, exported to ONNX and executed via ONNX Runtime with CUDA acceleration on the Jetson Nano
+- **Semantic Perception:** U-Net-based object detection and scene segmentation, exported to ONNX and executed via ONNX Runtime with CUDA acceleration on the Jetson Nano
 - **Obstacle Classification:** Detected objects are mapped to five functional risk groups — walkable surface, vehicle road, collision obstacle, fall hazard, dynamic hazard — each triggering a different audio response
 - **Depth Fusion:** Depth channel from the RGB-D camera is fused with segmentation output to estimate obstacle distance and severity; warnings are prioritized by proximity (critical threshold: ≤2 m)
 - **Sensor Fusion:** GPS and IMU data are combined to maintain robust outdoor localization
@@ -79,7 +79,7 @@ src/
 
 ### Key Design Decisions
 
-**YOLOv8 over U-Net segmentation:** YOLOv8 delivers higher frame rate and lower end-to-end latency on the Jetson Nano compared to U-Net architectures. For a safety-critical navigation system, responsiveness outweighs pixel-level mask precision.
+**U-Net segmentation over YOLOv8:** U-Net delivers higher frame rate and lower end-to-end latency on the Jetson Nano compared to YOLOv8 architectures. For a safety-critical navigation system, responsiveness outweighs pixel-level mask precision.
 
 **A\* over Dijkstra for routing:** Navigation module uses A\* with a haversine heuristic for faster route convergence on pedestrian OSM graphs. Routes are cached in memory after initial computation to avoid redundant CPU cycles.
 
@@ -111,21 +111,6 @@ Detected scene elements are mapped to functional risk groups that drive audio fe
 - Voice interface supports a defined command set in one primary language; multilingual support is deferred
 - OSM data must be pre-processed and stored on-device before field use
 - GPS cold-start warmup period (~60 s) is enforced before fixes are trusted for navigation
-
----
-
-## Development Status
-
-| Component | Status |
-|---|---|
-| Navigation module (A\*, OSM, GPS tracker) | ✅ Complete |
-| GPS reader + filter (NEO-7M, UART) | ✅ Complete |
-| YOLOv8 dataset preparation + class mapping | ✅ Complete |
-| Model training + ONNX export | 🔄 In progress |
-| Camera integration (IMX219, Jetson CSI) | 🔄 In progress |
-| Perception pipeline (inference + depth fusion) | ⏳ Pending |
-| TTS / STT on-device integration | ⏳ Pending |
-| System-level integration and field testing | ⏳ Pending |
 
 ---
 
