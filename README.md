@@ -15,7 +15,7 @@ ALAS aims to address this limitation by running perception, navigation, and audi
 The system consists of three tightly coupled components:
 
 ### Hardware Layer
-- RGB-D camera for spatial and visual perception  
+- RGB camera for spatial and visual perception  
 - IMU for motion and orientation estimation  
 - GPS for location awareness  
 - Microphone and speaker for audio interaction  
@@ -24,7 +24,7 @@ The system consists of three tightly coupled components:
 - Battery and power-management module
 
 ### AI & Perception Layer
-- Preprocessing of RGB-D frames  
+- Preprocessing of RGB frames  
 - Lightweight U-Net-based or MobileNet-based segmentation models suitable for embedded inference  
 - Pixel-level detection of walkable areas, curbs, and obstacles  
 - Depth-assisted distance estimation and obstacle severity evaluation  
@@ -34,7 +34,7 @@ The system consists of three tightly coupled components:
 - Offline Speech-to-Text for command recognition (button-activated)  
 - Offline Text-to-Speech for continuous guidance  
 - Route computation using preprocessed OpenStreetMap data  
-- Dijkstra-based pathfinding adapted for pedestrian networks  
+- A* based pathfinding adapted for pedestrian networks  
 - Continuous localization using GPS and IMU fusion  
 - Real-time adaptation of navigation and warning outputs
 
