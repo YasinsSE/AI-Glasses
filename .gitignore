@@ -1,56 +1,67 @@
-
-# Data / models / artifacts
-# IDE
-# Logs & temp
-# OS
-# Python
-# SLM Model weights & checkpoints
-# Vosk model (too large for git)
-*.bak
-*.bin
-*.egg-info/
-*.gguf
-*.iml
-*.jsonl
-*.log
-*.mp3
-*.orig
-*.pkl
-*.pt
-*.pth
-*.py[cod]
-*.pyd
-*.pyo
-*.so
-*.swo
-*.swp
-*.tmp
-*.wav
+# OS & System
 .DS_Store
+Thumbs.db
+
+# IDE & Editors
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+tempCodeRunnerFile.py
+
+# Python & Build
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
 .eggs/
+dist/
+build/
+.venv/
+venv/
+alas_env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.ipynb_checkpoints/
+
+# Environment Variables (Secrets)
 .env
 .env.*
-.idea/
-.ipynb_checkpoints/
-.mypy_cache/
-.pytest_cache/
-.pytype/
-.ruff_cache/
-.venv/
-.vscode/
-Thumbs.db
-__pycache__/
-aktif_rota.json
-alas_env/
-build/
+
+# Logs, Temp & Backup
+*.log
+*.tmp
+*.bak
+*.orig
+
+# Data & Datasets
 data/
 datasets/
-dist/
-src/tts_stt/adapters/
+*.pkl
+aktif_rota.json
+
+# Audio & Media
+*.wav
+*.mp3
+
+# ML Models, Weights & Large Artifacts
+# SLM Model weights & checkpoints
+*.bin
+*.gguf
+*.pt
+*.pth
+*.jsonl
+*.safetensors
 src/tts_stt/my_custom_slm/model.safetensors
-stt/tts
-tempCodeRunnerFile.py
 tts_stt/my_custom_slm/model.safetensors
-venv/
-vosk-model-small-tr-0.3.zip*.jsonl
+
+# Vosk & Specific STT/TTS folders
+stt/tts/
+src/tts_stt/adapters/
 vosk-model-small-tr-0.3/
+vosk-model-small-tr-0.3.zip
