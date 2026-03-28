@@ -1,66 +1,56 @@
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-*.iml
-
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.so
-*.egg-info/
-.eggs/
-dist/
-build/
-.venv/
-venv/
-.env
-.env.*
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.pytype/
-.ipynb_checkpoints/
-
-# Logs & temp
-*.log
-*.tmp
-*.swp
-*.swo
-*.bak
-*.orig
 
 # Data / models / artifacts
-data/
-datasets/
-
-*.wav
-*.mp3
-aktif_rota.json
-.DS_Store
-
-stt/tts
-
-*.pkl
-
+# IDE
+# Logs & temp
+# OS
+# Python
 # SLM Model weights & checkpoints
-*.gguf
+# Vosk model (too large for git)
+*.bak
 *.bin
+*.egg-info/
+*.gguf
+*.iml
+*.jsonl
+*.log
+*.mp3
+*.orig
+*.pkl
 *.pt
 *.pth
-tts_stt/my_custom_slm/model.safetensors
-
-# Vosk model (too large for git)
-vosk-model-small-tr-0.3/
-vosk-model-small-tr-0.3.zip*.jsonl
-tempCodeRunnerFile.py
-src/tts_stt/adapters/
-*.jsonl
-tempCodeRunnerFile.py
+*.py[cod]
+*.pyd
+*.pyo
+*.so
+*.swo
+*.swp
+*.tmp
+*.wav
+.DS_Store
+.eggs/
+.env
+.env.*
+.idea/
+.ipynb_checkpoints/
+.mypy_cache/
+.pytest_cache/
+.pytype/
+.ruff_cache/
+.venv/
+.vscode/
+Thumbs.db
+__pycache__/
+aktif_rota.json
 alas_env/
+build/
+data/
+datasets/
+dist/
+src/tts_stt/adapters/
 src/tts_stt/my_custom_slm/model.safetensors
+stt/tts
+tempCodeRunnerFile.py
+tts_stt/my_custom_slm/model.safetensors
+venv/
+vosk-model-small-tr-0.3.zip*.jsonl
+vosk-model-small-tr-0.3/
