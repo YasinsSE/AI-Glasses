@@ -8,7 +8,7 @@ random.seed(42)
 # Dosya yolları — scriptin kendi dizinine göre
 script_dir = os.path.dirname(os.path.abspath(__file__))
 input_file = os.path.join(script_dir, "slm_data.json")
-output_dir = os.path.expanduser("~/Desktop/egitim_verisi")
+output_dir = script_dir
 
 # Masaüstünde klasörü oluştur
 os.makedirs(output_dir, exist_ok=True)

@@ -1,11 +1,40 @@
 """
-Kullanım:
-    from tts_stt.stt import STTEngine
 
-    stt = STTEngine()
-    text = stt.listen()          # tek seferlik dinle
-    stt.listen_continuous(cb)    # sürekli dinle, callback'e gönder
+─────────────────────────────────────────────────────────────────
+İLK KURULUM (repo'yu clone'ladıktan sonra bir kez yapılmalı):
+─────────────────────────────────────────────────────────────────
+
+
+1. macOS'ta portaudio kur (PyAudio için):
+   brew install portaudio
+
+2. Gerekli kütüphaneleri kur:
+   pip install vosk pyaudio pyttsx3 mlx mlx-lm huggingface_hub
+
+3. Hugging Face'e login ol:
+   python -c "from huggingface_hub import login; login()"
+
+4. Fine-tune edilmiş SLM modelini indir:
+   python -c "from huggingface_hub import snapshot_download; snapshot_download('Sirius95/ai-glasses-safetensor', local_dir='src/tts_stt/my_custom_slm/')"
+
+5. Vosk Türkçe modeli ilk çalıştırmada OTOMATİK indirilir.
+
+6. Çalıştır:
+   cd src/tts_stt
+   python stt.py
+
+─────────────────────────────────────────────────────────────────
+(Opsiyonel) SLM modelini yeniden eğitmek için:
+─────────────────────────────────────────────────────────────────
+
+   cd src/tts_stt
+   python slmprepare.py
+   python -m mlx_lm lora --model Qwen/Qwen2.5-0.5B-Instruct --data . --train --iters 500 --batch-size 4 --num-layers 8 --learning-rate 1e-4 --seed 42
+   python -m mlx_lm fuse --model Qwen/Qwen2.5-0.5B-Instruct --adapter-path adapters/ --save-path my_custom_slm/
+
+─────────────────────────────────────────────────────────────────
 """
+
 import json
 import os
 import time
