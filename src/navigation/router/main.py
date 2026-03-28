@@ -8,9 +8,13 @@
 import logging
 import time
 
-from .models import Coord, RouteStatus
-from .nav_config import NavConfig
-from .navigator import NavigationSystem
+from models import Coord, RouteStatus
+from nav_config import NavConfig
+from navigator import NavigationSystem
+
+# from .models import Coord, RouteStatus
+# from .nav_config import NavConfig
+# from .navigator import NavigationSystem
 
 # ------------------------------------------------------------------
 # Logging setup — configure once here, all modules inherit
@@ -52,15 +56,19 @@ DESTINATION = test_locations[-1]
 
 def main() -> None:
     # 1. Boot system (loads OSM map once)
+    start_boot = time.perf_counter()
     nav = NavigationSystem("map.osm", config=config)
-
+    end_boot = time.perf_counter()
+    print(f"[*] Harita yüklenme süresi: {end_boot - start_boot:.4f}saniye")
     # 2. Request a route
-    success, msg, poi = nav.navigate_to_nearest(ORIGIN, "atm")
+    start_boot = time.perf_counter()
+    success, msg, poi = nav.navigate_to_nearest(ORIGIN, "okul")
     #success, msg = nav.start_navigation(ORIGIN, DESTINATION)
+    end_boot = time.perf_counter()
     if not success:
         print(f"[Main] Could not start navigation: {msg}")
         return
-
+    print(f"[*] Rota hesaplama süresi: {end_boot - start_boot:.4f}saniye")
     print("\n--- GPS Loop Active ---")
 
     # 3. GPS loop — replace with real GPS feed in production
