@@ -59,7 +59,7 @@ aktif_rota.json
 *.safetensors
 src/tts_stt/my_custom_slm/model.safetensors
 tts_stt/my_custom_slm/model.safetensors
-
+tts_stt/my_custom_slm/tokenizer.json
 # Vosk & Specific STT/TTS folders
 stt/tts/
 src/tts_stt/adapters/
