@@ -1,109 +1,92 @@
 import subprocess
 import sys
-import traceback
 import threading
 import queue
 import os
+from pathlib import Path 
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from navigation.router.navigator import NavigationSystem
-from navigation.router.models import Coord
-from navigation.router.nav_config import NavConfig
-
+# Kuyruk sistemi (Seslerin birbirini kesmemesi için)
 _tts_queue = queue.Queue()
 
 def _tts_worker():
+    """Arka planda seslendirme yapan işçi thread."""
     while True:
         text = _tts_queue.get()
         if text is None:
+            _tts_queue.task_done()
             break
+
+        # Jetson Nano ve Mac uyumlu sessiz çalıştırma scripti
+        # subprocess kullanarak ana programın donmasını engelliyoruz
         script = (
             "import pyttsx3\n"
-            "engine = pyttsx3.init()\n"
-            "engine.setProperty('rate', 150)\n"
-            f"engine.say({repr(text)})\n"
-            "engine.runAndWait()"
+            "try:\n"
+            "    engine = pyttsx3.init()\n"
+            "    engine.setProperty('rate', 160)\n"  # Konuşma hızı
+            "    engine.setProperty('volume', 1.0)\n"
+            f"    engine.say({repr(text)})\n"
+            "    engine.runAndWait()\n"
+            "except:\n"
+            "    pass"
         )
         try:
-            subprocess.run([sys.executable, "-c", script])
+            subprocess.run(
+                [sys.executable, "-c", script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         except Exception as e:
-            print(f"TTS hatası: {e}")
+            print(f"[TTS ERR] Seslendirme hatası: {e}")
         finally:
             _tts_queue.task_done()
 
+
+# Worker thread'i başlat
 _tts_thread = threading.Thread(target=_tts_worker, daemon=True)
 _tts_thread.start()
 
+
 def speak(text: str):
+    """Metni seslendirme kuyruğuna ekler."""
     text = (text or "").strip()
     if text:
         _tts_queue.put(text)
 
+def wait_until_done():
+    """Kuyruktaki tüm seslerin bitmesini bekler."""
+    _tts_queue.join()
 
-def parse_floats(parts, count: int):
-    if len(parts) != count:
-        raise ValueError(f"{count} sayı bekleniyor, gelen: {len(parts)}")
-    return [float(x) for x in parts]
-
-
-def main():
-    config = NavConfig(log_dir="logs")
-    nav = NavigationSystem("navigation/router/map.osm", config=config)
-
-    print("Komutlar:")
-    print("  start <lat> <lon> <poi_tipi>")
-    print("  gps <lat> <lon>")
-    print("  quit")
-
-    while True:
-        line = input("> ").strip()
-        if not line:
-            continue
-
-        if line.lower() in ("q", "quit", "exit"):
-            break
-
-        parts = line.split()
-        cmd = parts[0].lower()
-        args = parts[1:]
-
-        try:
-            if cmd == "start":
-                s_lat, s_lon = parse_floats(args[:2], 2)
-                poi_type = args[2] if len(args) > 2 else "pharmacy"
-                success, msg, _ = nav.navigate_to_nearest(
-                    Coord(lat=s_lat, lon=s_lon),
-                    poi_type
-                )
-                print("[TTS]", msg)
-                speak(msg)
-
-                if not success:
-                    print("[NAV]", "Rota hesaplanamadı.")
-                    continue
-
-            elif cmd == "gps":
-                lat, lon = parse_floats(args, 2)
-                result = nav.update(Coord(lat=lat, lon=lon))
-                out = f"{result.status}: {result.message}"
-                print("[NAV]", out)
-                speak(result.message)
-
-            else:
-                msg = "Bilinmeyen komut."
-                print("[TTS]", msg)
-                ##speak(msg)
-
-        except Exception as e:
-            err = f"Hata: {e}"
-            print(traceback.format_exc())
-            print("[ERR]", err)
-            ##speak(err)
-            
-    _tts_queue.join()       # Kuyruktaki tüm seslerin bitmesini bekle
-    _tts_queue.put(None)    # Worker thread'e dur sinyali gönder
+def shutdown_tts():
+    """
+    Kuyruktaki tüm seslerin bitmesini bekler, sonra worker'ı kapatır.
+    Program kapanmadan önce çağrılmalı.
+    """
+    _tts_queue.join()       # Bekleyen sesler bitsin
+    _tts_queue.put(None)    # Worker'a dur sinyali
     _tts_thread.join(timeout=5)
+    print("[TTS] Kapatıldı.")
 
+
+def handle_intent_response(intent: str, text: str = ""):
+    """
+    SLM'den gelen niyete göre kullanıcıya sesli geri bildirim verir.
+    """
+    responses = {
+        "system_command": "Sistem kapatılıyor, iyi günler dilerim.",
+        "navigation": "Anlaşıldı, rota hesaplanıyor.",
+        "general": "",  # Genel durumlarda sessiz kal
+    }
+
+    msg = responses.get(intent, "")
+    if msg:
+        speak(msg)
+    # NOT: general intent'te kullanıcının söylediği metni papağan gibi
+    # tekrar etmiyoruz. İleride LLM entegrasyonu ile anlamlı cevap
+    # üretilebilir (ör. "saat kaç" → gerçek saat bilgisi).
+
+
+# Modülün kendi başına test edilebilmesi için
 if __name__ == "__main__":
-    main()
+    print("TTS Test Sistemi Başlatıldı...")
+    speak("Sistem hazır. Ses testi yapılıyor.")
+    shutdown_tts()

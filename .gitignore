@@ -1,13 +1,16 @@
-# OS
+# OS & System
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
+# IDE & Editors
 .idea/
+.vscode/
 *.iml
+*.swp
+*.swo
+tempCodeRunnerFile.py
 
-# Python
+# Python & Build
 __pycache__/
 *.py[cod]
 *.pyo
@@ -19,32 +22,46 @@ dist/
 build/
 .venv/
 venv/
-.env
-.env.*
+alas_env/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .pytype/
 .ipynb_checkpoints/
 
-# Logs & temp
+# Environment Variables (Secrets)
+.env
+.env.*
+
+# Logs, Temp & Backup
 *.log
 *.tmp
-*.swp
-*.swo
 *.bak
 *.orig
 
-# Data / models / artifacts
+# Data & Datasets
 data/
 datasets/
+*.pkl
+aktif_rota.json
 
+# Audio & Media
 *.wav
 *.mp3
-aktif_rota.json
-.DS_Store
 
-stt/tts
+# ML Models, Weights & Large Artifacts
+# SLM Model weights & checkpoints
+*.bin
+*.gguf
+*.pt
+*.pth
+*.jsonl
+*.safetensors
+src/tts_stt/my_custom_slm/model.safetensors
+tts_stt/my_custom_slm/model.safetensors
 
-*.pkl
-alas_env/
+# Vosk & Specific STT/TTS folders
+stt/tts/
+src/tts_stt/adapters/
+vosk-model-small-tr-0.3/
+vosk-model-small-tr-0.3.zip

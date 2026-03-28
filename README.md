@@ -52,6 +52,15 @@ Converts perception outputs into safe, understandable guidance.
 - **STT (Speech-to-Text):** Button-activated voice command recognition for commands such as `"nearest pharmacy"`, `"cancel route"`, `"status"` — processed locally
 - **Operating Modes:** System transitions between Standby, Environment Awareness, Navigation, Obstacle Avoidance, and Error/Recovery modes based on sensor state and user input
 
+The final objective is a portable, locally operating assistive device capable of perceiving the environment, interpreting scene structure, and guiding the user safely through audio feedback.
+
+## SLM Model Kurulumu
+
+Base model boyutu büyük olduğu için repoya dahil edilmemiştir.
+İlk kurulumda aşağıdaki komutu çalıştırın:
+
+pip install huggingface_hub
+huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct model.safetensors --local-dir src/tts_stt/my_custom_slm/
 ---
 
 ## Software Modules
