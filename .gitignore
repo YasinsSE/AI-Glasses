@@ -62,3 +62,5 @@ tempCodeRunnerFile.py
 src/tts_stt/adapters/
 *.jsonl
 tempCodeRunnerFile.py
+alas_env/
+src/tts_stt/my_custom_slm/model.safetensors
