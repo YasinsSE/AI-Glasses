@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ALAS Main System (Mock)",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "main.alas_main", "--mock", "--no-camera"],
+      "port": 0
+    },
+    {
+      "name": "ALAS Main System (Jetson)",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "main.alas_main", "--model", "models/segmentation/alas_engine.trt"],
+      "port": 0
+    },
+    {
+      "name": "Navigation Module Test",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["navigation/router/main.py"],
+      "port": 0
+    },
+    {
+      "name": "STT/TTS Voice Test",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["tts_stt/stt.py"],
+      "port": 0
+    }
+  ]
+}
