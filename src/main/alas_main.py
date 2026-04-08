@@ -126,6 +126,10 @@ class PerceptionThread(threading.Thread):
             for alert in result.alerts:
                 speak(alert)
 
+            # ── Speak path guidance (only when scene is safe and no alerts) ──
+            if result.path_guidance and not result.alerts and result.scene.is_safe:
+                speak(result.path_guidance)
+
             # Log scene summary periodically
             if not result.scene.is_safe:
                 logger.info(

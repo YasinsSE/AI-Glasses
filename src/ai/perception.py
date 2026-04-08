@@ -92,6 +92,14 @@ MIN_ALERT_RATIO = 0.02
 VERY_CLOSE_RATIO = 0.15
 NEARBY_RATIO = 0.05
 
+# Path guidance settings
+# Bottom fraction of frame used for immediate path analysis (where feet will step)
+PATH_BOTTOM_FRACTION = 0.5
+# Minimum walkable ratio in bottom region to give a direction (below = warn)
+MIN_WALKABLE_FOR_GUIDANCE = 0.08
+# Seconds between consecutive path guidance messages
+PATH_GUIDANCE_COOLDOWN = 5.0
+
 
 # ═══════════════════════════════════════════════════════════════════
 #  DATA CLASSES — pipeline output
@@ -124,6 +132,7 @@ class PerceptionResult:
     mask: np.ndarray             # class-ID mask (H_model, W_model)
     inference_ms: float          # TRT/ONNX inference time
     total_ms: float              # full pipeline time
+    path_guidance: str | None = None  # Turkish walking direction instruction
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -345,6 +354,73 @@ def generate_alerts(
     return [text for _, text in raw]
 
 
+def generate_path_guidance(mask: np.ndarray) -> str | None:
+    """
+    Analyze the walkable surface in the bottom half of the frame and return
+    a Turkish walking direction instruction.
+
+    Strategy:
+      1. Focus on the bottom half of the frame — that is where the immediate
+         path lies.
+      2. Calculate the horizontal centroid of all WALKABLE_SURFACE pixels.
+      3. Map centroid position to a directional instruction.
+      4. If walkable area is too small, warn the user instead.
+
+    Returns None if there is no walkable surface at all.
+
+    Examples:
+      centroid at 30% width → "Hafif sola yönelin"
+      centroid at 50% width → "Düz yürüyün"
+      centroid at 72% width → "Hafif sağa yönelin, düz yürüyün"
+    """
+    h, w = mask.shape
+    bottom_start = int(h * (1.0 - PATH_BOTTOM_FRACTION))
+    bottom = mask[bottom_start:, :]
+
+    walkable = (bottom == ClassID.WALKABLE_SURFACE)
+    walkable_px = float(np.sum(walkable))
+    total_px = float(bottom.size)
+
+    if walkable_px == 0:
+        return None
+
+    walkable_ratio = walkable_px / total_px
+
+    if walkable_ratio < MIN_WALKABLE_FOR_GUIDANCE:
+        return "Yürünebilir alan çok azalıyor, dikkatli ilerleyin"
+
+    # Horizontal centroid: where is the walkable surface concentrated?
+    col_indices = np.where(walkable)[1]
+    centroid_x = float(np.mean(col_indices)) / w  # normalised [0, 1]
+
+    # How much of the center strip (35%-65%) is walkable? — tells us if
+    # the path goes straight ahead regardless of centroid
+    cx_l, cx_r = int(w * 0.35), int(w * 0.65)
+    center_ratio = float(np.sum(walkable[:, cx_l:cx_r])) / float(bottom[:, cx_l:cx_r].size)
+
+    # Map centroid to primary direction
+    if centroid_x < 0.25:
+        primary = "Sola dönün"
+    elif centroid_x < 0.38:
+        primary = "Hafif sola yönelin"
+    elif centroid_x <= 0.62:
+        primary = "Düz yürüyün"
+    elif centroid_x < 0.75:
+        primary = "Hafif sağa yönelin"
+    else:
+        primary = "Sağa dönün"
+
+    # If center is clear enough, append "düz yürüyün" as confirmation
+    if center_ratio >= 0.40 and primary != "Düz yürüyün":
+        return f"{primary}, düz yürüyün"
+
+    # Narrow path warning
+    if walkable_ratio < 0.18:
+        return f"{primary}, yol daralıyor"
+
+    return primary
+
+
 def render_overlay(
     frame_bgr: np.ndarray,
     mask: np.ndarray,
@@ -397,6 +473,8 @@ class PerceptionPipeline:
 
         # Per-class cooldown tracker (class_id → last alert unix time)
         self._last_alert_time: dict[int, float] = {}
+        # Cooldown for path guidance messages
+        self._last_guidance_time: float = 0.0
 
         logger.info(f"[Perception] Ready — input size: {input_w}x{input_h}")
 
@@ -430,6 +508,13 @@ class PerceptionPipeline:
         # 5. Generate alerts
         alerts = generate_alerts(scene, self._last_alert_time, now)
 
+        # 6. Path guidance — only when cooldown has elapsed
+        path_guidance: str | None = None
+        if (now - self._last_guidance_time) >= PATH_GUIDANCE_COOLDOWN:
+            path_guidance = generate_path_guidance(mask)
+            if path_guidance:
+                self._last_guidance_time = now
+
         total_ms = (time.monotonic() - t_start) * 1000
 
         return PerceptionResult(
@@ -438,8 +523,10 @@ class PerceptionPipeline:
             mask=mask,
             inference_ms=inference_ms,
             total_ms=total_ms,
+            path_guidance=path_guidance,
         )
 
     def reset_cooldowns(self) -> None:
         """Reset all alert cooldowns (e.g. after a long pause)."""
         self._last_alert_time.clear()
+        self._last_guidance_time = 0.0
