@@ -24,7 +24,7 @@ Usage:
         speak(alert)
 """
 
-from __future__ import annotations
+#from __future__ import annotations
 
 import time
 import logging
@@ -55,7 +55,7 @@ class ClassID(IntEnum):
     VEHICLE            = 6
 
 
-CLASS_NAMES: dict[int, str] = {
+CLASS_NAMES = {
     ClassID.WALKABLE_SURFACE:   "walkable_surface",
     ClassID.CROSSWALK:          "crosswalk",
     ClassID.VEHICLE_ROAD:       "vehicle_road",
@@ -66,7 +66,7 @@ CLASS_NAMES: dict[int, str] = {
 }
 
 # BGR colours for optional overlay rendering
-CLASS_COLORS_BGR: dict[int, tuple[int, int, int]] = {
+CLASS_COLORS_BGR = {
     ClassID.WALKABLE_SURFACE:   (0, 200, 0),
     ClassID.CROSSWALK:          (200, 255, 0),
     ClassID.VEHICLE_ROAD:       (180, 30, 30),
@@ -77,7 +77,7 @@ CLASS_COLORS_BGR: dict[int, tuple[int, int, int]] = {
 }
 
 # Alert config per class — priority 0 = silent
-CLASS_ALERT_CONFIG: dict[int, dict] = {
+CLASS_ALERT_CONFIG= {
     ClassID.WALKABLE_SURFACE:   {"priority": 0, "alert": None,                                           "cooldown": 0},
     ClassID.CROSSWALK:          {"priority": 1, "alert": "Yaya geçidi algılandı, geçiş güvenli",        "cooldown": 8.0},
     ClassID.VEHICLE_ROAD:       {"priority": 4, "alert": "Dikkat, araç yolu, girmeyin",                  "cooldown": 5.0},
@@ -121,7 +121,7 @@ class ZoneInfo:
     class_name: str
     pixel_ratio: float          # fraction of frame occupied [0, 1]
     dominant_zone: str           # "left" | "center" | "right"
-    zone_ratios: dict[str, float] = field(default_factory=dict)
+    zone_ratios: dict = field(default_factory=dict)
     walkable_overlap: float = 1.0
         # Fraction of this class's pixels that overlap the (dilated) walkable
         # surface. Only meaningful for classes in WALKABLE_GATED_CLASSES;
@@ -136,15 +136,15 @@ class ZoneInfo:
 class SceneAnalysis:
     """Full scene understanding result for a single frame."""
     walkable_ratio: float        # how much of the frame is walkable
-    zones: list[ZoneInfo]        # per-class breakdowns (non-zero only)
+    zones: list                  # per-class breakdowns (non-zero only)
     is_safe: bool                # True if no high-priority hazards
-    dominant_hazard: str | None  # name of the biggest threat, or None
+    dominant_hazard: Optional[str]  # name of the biggest threat, or None
 
 
 @dataclass
 class PerceptionResult:
     """Everything the main loop needs from a single frame."""
-    alerts: list[str]            # TTS-ready strings, priority-sorted
+    alerts: list                 # TTS-ready strings, priority-sorted
     scene: SceneAnalysis         # detailed scene breakdown
     mask: np.ndarray             # class-ID mask (H_model, W_model)
     inference_ms: float          # TRT/ONNX inference time
@@ -170,10 +170,10 @@ class TensorRTBackend:
             self.engine = trt.Runtime(trt_logger).deserialize_cuda_engine(f.read())
 
         self.context = self.engine.create_execution_context()
-        self.bindings: list[int] = []
+        self.bindings: list = []
         self.d_input = self.d_output = None
-        self.h_output: np.ndarray | None = None
-        self.output_shape: tuple | None = None
+        self.h_output: Optional[np.ndarray] = None
+        self.output_shape: Optional[tuple] = None
 
         for i in range(self.engine.num_bindings):
             shape = self.engine.get_binding_shape(i)
@@ -280,10 +280,10 @@ def analyse_scene(
     k = max(3, int(DILATE_FRAC * w))
     walkable_dilated = cv2.dilate(walkable_binary, np.ones((k, k), np.uint8))
 
-    zones: list[ZoneInfo] = []
+    zones: list = []
     walkable_ratio = 0.0
     max_hazard_priority = 0
-    dominant_hazard: str | None = None
+    dominant_hazard: Optional[str] = None
 
     for cid in ClassID:
         binary = (mask == cid)
@@ -349,9 +349,9 @@ def analyse_scene(
 
 def generate_alerts(
     scene: SceneAnalysis,
-    last_alert_time: dict[int, float],
+    last_alert_time: dict,
     now: float,
-) -> list[str]:
+) -> list:
     """
     Generate priority-sorted TTS alert strings from scene analysis.
 
@@ -370,7 +370,7 @@ def generate_alerts(
         otherwise fall back to the pixel-ratio heuristic.
       - Add direction if not center ("solunuzda" / "sağınızda")
     """
-    raw: list[tuple[int, str]] = []
+    raw: list = []
 
     for zone in scene.zones:
         cfg = CLASS_ALERT_CONFIG[zone.class_id]
@@ -400,7 +400,7 @@ def generate_alerts(
             if not (is_center or is_close):
                 continue
 
-        parts: list[str] = [cfg["alert"]]
+        parts: list = [cfg["alert"]]
 
         # ── Proximity wording ──
         if zone.estimated_distance_m is not None:
@@ -485,7 +485,7 @@ class PerceptionPipeline:
         self._camera_geometry = camera_geometry
 
         # Per-class cooldown tracker (class_id → last alert unix time)
-        self._last_alert_time: dict[int, float] = {}
+        self._last_alert_time: dict = {}
 
         logger.info(f"[Perception] Ready — input size: {input_w}x{input_h}")
 

@@ -22,8 +22,6 @@ Event statuses (WAYPOINT_HIT, OFF_ROUTE, FINISHED) are spoken immediately,
 deduped on text so the same message does not repeat across GPS ticks.
 """
 
-from __future__ import annotations
-
 import logging
 import threading
 import time

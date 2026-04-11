@@ -15,12 +15,13 @@ Three responsibilities:
        not be reordered without thinking.
 """
 
-from __future__ import annotations
+#from __future__ import annotations
 
 import logging
 import signal
 import threading
 import time
+from typing import Dict
 from enum import Enum
 from typing import Optional
 

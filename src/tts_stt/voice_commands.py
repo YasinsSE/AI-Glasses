@@ -8,15 +8,13 @@ Owns the spoken-command session triggered by a button press:
     2. Otherwise prompt → listen → classify intent → execute.
 
 Intents handled:
-    - **navigation**     : extract a POI category from the spoken text and
+    - **navigation** : extract a POI category from the spoken text and
                            ask NavigationSystem to route to the nearest one.
     - **system_command** : sleep / shutdown / cancel-route.
     - anything else      : speak "Anlaşıldı." and return.
 
 All speech goes through ``VoicePolicy`` so TTS gating stays centralised.
 """
-
-from __future__ import annotations
 
 import logging
 import threading
@@ -25,7 +23,7 @@ from typing import Optional
 from main.config import ALASConfig
 from main.lifecycle import ModeManager, SystemMode
 from navigation.router import Coord, NavigationSystem
-from tts_stt.stt import STTEngine
+# from tts_stt.stt import STTEngine  <-- PYAUDIO HATASI VERMEMESI ICIN IPTAL EDILDI
 from tts_stt.voice_policy import VoicePolicy
 
 logger = logging.getLogger("ALAS.voice_commands")
@@ -35,7 +33,7 @@ class VoiceCommandHandler:
     """Handles a single voice-command session per button press."""
 
     # Spoken keyword → POI category mapping
-    NAV_KEYWORDS: dict[str, str] = {
+    NAV_KEYWORDS: dict = {
         "metro":    "metro",
         "metroy":   "metro",
         "eczane":   "eczane",
@@ -62,7 +60,7 @@ class VoiceCommandHandler:
         config: ALASConfig,
         nav: NavigationSystem,
         gps,
-        stt: STTEngine,
+        stt,  # <--- STTEngine TIP BELIRTECI SILINDI
         voice: VoicePolicy,
         modes: ModeManager,
         stop_event: threading.Event,
@@ -93,6 +91,12 @@ class VoiceCommandHandler:
             return
 
         self._voice.say_prompt("Sizi dinliyorum.")
+
+        # EGER TESTTE MIKROFON YOKSA VE STT NONE ISE BURASI HATA VEREBILIR
+        if self._stt is None:
+            logger.warning("[Voice] STT modülü devre dışı bırakıldığı için sesli komut alınamıyor.")
+            self._voice.say_prompt("Mikrofon kapalı, komut alamıyorum.")
+            return
 
         text = self._stt.listen(
             timeout_sec=self._config.stt_listen_timeout,

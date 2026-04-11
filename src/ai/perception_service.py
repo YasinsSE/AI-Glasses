@@ -21,13 +21,13 @@ is one consumer and the helper is fifteen lines, so a stand-alone class would
 be premature abstraction.
 """
 
-from __future__ import annotations
+#from __future__ import annotations
 
 import logging
 import threading
 import time
 from typing import Optional
-
+from typing import Dict
 from ai.geometry import CameraGeometry
 from ai.perception import PerceptionPipeline
 from main.config import ALASConfig

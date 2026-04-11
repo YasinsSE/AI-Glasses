@@ -6,8 +6,6 @@ unaware that a hardware GPS is not connected. Implements the same
 ``start / stop / get_coord / get_health`` surface.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Optional, Tuple
 

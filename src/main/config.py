@@ -10,9 +10,10 @@ The dataclass deliberately mixes "tunables" (frame rate, distances, …) with
 requires passing two objects around.
 """
 
-from __future__ import annotations
+#from __future__ import annotations
 
 import argparse
+from typing import Dict
 from dataclasses import dataclass
 
 
@@ -34,7 +35,7 @@ class ALASConfig:
     camera_vfov_deg: float = 60.0   # vertical field of view in degrees
 
     # ── Navigation ───────────────────────────────────────────────
-    osm_map_path: str = "src/navigation/router/map.osm"
+    osm_map_path: str = "navigation/router/map.osm"
     gps_port: str = "/dev/ttyTHS1"
     gps_baudrate: int = 9600
     gps_warmup_sec: float = 60.0
@@ -67,7 +68,7 @@ class ALASConfig:
     # CLI parsing
     # ------------------------------------------------------------------
     @classmethod
-    def from_cli(cls, argv: list[str] | None = None) -> "ALASConfig":
+    def from_cli(cls, argv=None):
         """
         Build a config from command-line arguments. Any flag left unset
         falls back to the dataclass default.

@@ -19,7 +19,7 @@ Desktop test (no GPIO / GPS / camera):
     cd src && python -m main.alas_main --mock --no-camera
 """
 
-from __future__ import annotations
+#from __future__ import annotations
 
 import logging
 import os
@@ -38,7 +38,7 @@ from navigation.navigation_service import NavigationService
 from navigation.router import NavigationSystem, NavConfig
 from navigation.sensors import GPSReader, MockGPSReader
 from tts_stt.button_listener import ButtonListener
-from tts_stt.stt import STTEngine
+#from tts_stt.stt import STTEngine
 from tts_stt.voice_commands import VoiceCommandHandler
 from tts_stt.voice_policy import VoicePolicy
 
@@ -76,8 +76,8 @@ def main() -> None:
     nav = NavigationSystem(config.osm_map_path, NavConfig(log_dir=config.log_dir))
 
     # ── 5. Speech recognition engine ─────────────────────────────
-    stt = STTEngine()
-
+    #stt = STTEngine()
+    stt = None
     # ── 6. Background services ───────────────────────────────────
     perception = (
         None if config.no_camera
@@ -90,7 +90,7 @@ def main() -> None:
         on_press=commands.handle_press,
         modes=modes,
         stop_event=stop_event,
-        mock=config.mock,
+        mock= True,#config.mock,
     )
 
     if perception is not None:

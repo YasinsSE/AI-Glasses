@@ -14,7 +14,7 @@ current ``SystemMode`` and deciding whether to wake from SLEEP or run an
 STT session. Keeps this class trivial.
 """
 
-from __future__ import annotations
+#from __future__ import annotations
 
 import logging
 import threading

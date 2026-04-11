@@ -26,12 +26,12 @@ Limitations (intentional, documented for callers):
     - Assumes camera is level (no roll). Head-tilt sideways skews the result.
 """
 
-from __future__ import annotations
+#from __future__ import annotations
 
 import math
 from dataclasses import dataclass
 from typing import Optional
-
+from typing import Dict
 
 @dataclass(frozen=True)
 class CameraGeometry:
