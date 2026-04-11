@@ -36,6 +36,8 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from ai.geometry import CameraGeometry, pixel_to_ground_distance
+
 logger = logging.getLogger("ALAS.perception")
 
 
@@ -81,16 +83,31 @@ CLASS_ALERT_CONFIG: dict[int, dict] = {
     ClassID.VEHICLE_ROAD:       {"priority": 4, "alert": "Dikkat, araç yolu, girmeyin",                  "cooldown": 5.0},
     ClassID.COLLISION_OBSTACLE: {"priority": 3, "alert": "Önünüzde engel var, durun veya yön değiştirin","cooldown": 3.0},
     ClassID.FALL_HAZARD:        {"priority": 3, "alert": "Zemin tehlikesi, yavaşlayın",                  "cooldown": 3.0},
-    ClassID.DYNAMIC_HAZARD:     {"priority": 4, "alert": "Hareketli tehlike yakınızda",                  "cooldown": 2.0},
+    ClassID.DYNAMIC_HAZARD:     {"priority": 4, "alert": "Hareketli tehlike yakınızda",                  "cooldown": 4.0},
     ClassID.VEHICLE:            {"priority": 5, "alert": "Durun, araç algılandı",                        "cooldown": 1.5},
 }
 
 # Minimum pixel ratio for a class to trigger an alert
 MIN_ALERT_RATIO = 0.02
 
-# Pixel ratio thresholds for proximity wording
+# Pixel ratio thresholds for proximity wording (fallback when no distance estimate)
 VERY_CLOSE_RATIO = 0.15
 NEARBY_RATIO = 0.05
+
+# ── Walkable-overlap gating (applied to static obstacles only) ──
+# A COLLISION_OBSTACLE / FALL_HAZARD is suppressed unless at least
+# MIN_WALKABLE_OVERLAP of its pixels overlap the (dilated) walkable surface.
+# Vehicles and dynamic hazards are NEVER gated this way — users still need
+# warnings about a car that has not yet entered the sidewalk.
+DILATE_FRAC = 0.06                       # dilation kernel as fraction of mask width
+MIN_WALKABLE_OVERLAP = 0.10              # ≥10% of pixels must overlap walkable
+MIN_WALKABLE_RATIO_FOR_GATING = 0.05     # safety hatch: bypass gate if scene
+                                         # has too little walkable area to trust
+WALKABLE_GATED_CLASSES = {ClassID.COLLISION_OBSTACLE, ClassID.FALL_HAZARD}
+
+# Metric distance thresholds (used when CameraGeometry is provided)
+VERY_CLOSE_M = 2.0
+NEARBY_M = 5.0
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -105,6 +122,14 @@ class ZoneInfo:
     pixel_ratio: float          # fraction of frame occupied [0, 1]
     dominant_zone: str           # "left" | "center" | "right"
     zone_ratios: dict[str, float] = field(default_factory=dict)
+    walkable_overlap: float = 1.0
+        # Fraction of this class's pixels that overlap the (dilated) walkable
+        # surface. Only meaningful for classes in WALKABLE_GATED_CLASSES;
+        # defaults to 1.0 so non-gated classes always pass the gate.
+    estimated_distance_m: Optional[float] = None
+        # Ground-plane projected distance to the bottom-most pixel of the
+        # blob, in metres. None when no CameraGeometry was provided or when
+        # the bottom pixel projects above the horizon.
 
 
 @dataclass
@@ -229,19 +254,31 @@ def postprocess(logits: np.ndarray) -> np.ndarray:
     return logits.astype(np.uint8)
 
 
-def analyse_scene(mask: np.ndarray) -> SceneAnalysis:
+def analyse_scene(
+    mask: np.ndarray,
+    camera_geom: Optional[CameraGeometry] = None,
+) -> SceneAnalysis:
     """
     Extract meaningful information from the segmentation mask.
 
     For each detected class, compute:
       - pixel ratio (how much of the frame it occupies)
       - dominant zone (left / center / right third of the frame)
-
-    Also determine overall walkability and primary hazard.
+      - walkable overlap (fraction touching the dilated walkable surface) —
+        only computed for static obstacles
+      - estimated distance via ground-plane projection — only when
+        ``camera_geom`` is provided
     """
     h, w = mask.shape
     third = w // 3
     total_px = float(h * w)
+
+    # Pre-compute the dilated walkable mask once. The dilation provides a
+    # tolerance band so an obstacle resting *next to* the sidewalk still
+    # counts as being on the walking path.
+    walkable_binary = (mask == ClassID.WALKABLE_SURFACE).astype(np.uint8)
+    k = max(3, int(DILATE_FRAC * w))
+    walkable_dilated = cv2.dilate(walkable_binary, np.ones((k, k), np.uint8))
 
     zones: list[ZoneInfo] = []
     walkable_ratio = 0.0
@@ -267,12 +304,28 @@ def analyse_scene(mask: np.ndarray) -> SceneAnalysis:
         }
         dominant = max(zone_ratios, key=zone_ratios.get)
 
+        # ── Walkable overlap (only meaningful for gated classes) ──
+        overlap = 1.0
+        if cid in WALKABLE_GATED_CLASSES:
+            overlap_px = float(np.sum(np.logical_and(binary, walkable_dilated)))
+            overlap = overlap_px / px_count if px_count > 0 else 0.0
+
+        # ── Distance estimate via ground-plane projection ──
+        distance_m: Optional[float] = None
+        if camera_geom is not None and cid != ClassID.WALKABLE_SURFACE:
+            ys, _ = np.where(binary)
+            if ys.size > 0:
+                bottom_y = int(ys.max())
+                distance_m = pixel_to_ground_distance(bottom_y, h, camera_geom)
+
         zones.append(ZoneInfo(
             class_id=int(cid),
             class_name=CLASS_NAMES[cid],
             pixel_ratio=ratio,
             dominant_zone=dominant,
             zone_ratios=zone_ratios,
+            walkable_overlap=overlap,
+            estimated_distance_m=distance_m,
         ))
 
         if cid == ClassID.WALKABLE_SURFACE:
@@ -306,7 +359,15 @@ def generate_alerts(
       - Skip walkable_surface (silent = safe)
       - Skip classes below MIN_ALERT_RATIO (too small to matter)
       - Respect per-class cooldown to avoid TTS spam
-      - Add proximity wording ("çok yakın" / "yakın")
+      - **Walkable-area gate** for static obstacles only (COLLISION_OBSTACLE,
+        FALL_HAZARD): require ≥10% pixel overlap with the dilated walkable
+        surface. Bypassed when the scene has too little walkable area to
+        trust (safety hatch).
+      - **Lateral suppression** for DYNAMIC_HAZARD: a person on the side
+        below VERY_CLOSE_RATIO is silenced. Only center-zone or very-close
+        dynamic hazards alert.
+      - Distance-aware proximity wording when CameraGeometry is available;
+        otherwise fall back to the pixel-ratio heuristic.
       - Add direction if not center ("solunuzda" / "sağınızda")
     """
     raw: list[tuple[int, str]] = []
@@ -323,13 +384,37 @@ def generate_alerts(
         if elapsed < cfg["cooldown"]:
             continue
 
+        # ── Walkable gate (static obstacles only) ──
+        if (
+            zone.class_id in WALKABLE_GATED_CLASSES
+            and scene.walkable_ratio >= MIN_WALKABLE_RATIO_FOR_GATING
+            and zone.walkable_overlap < MIN_WALKABLE_OVERLAP
+        ):
+            continue
+
+        # ── Lateral suppression for dynamic hazards ──
+        # A pedestrian / cyclist on the side, not very close, is silenced.
+        if zone.class_id == ClassID.DYNAMIC_HAZARD:
+            is_center = zone.dominant_zone == "center"
+            is_close = zone.pixel_ratio > VERY_CLOSE_RATIO
+            if not (is_center or is_close):
+                continue
+
         parts: list[str] = [cfg["alert"]]
 
-        # Proximity
-        if zone.pixel_ratio > VERY_CLOSE_RATIO:
-            parts.append("çok yakın")
-        elif zone.pixel_ratio > NEARBY_RATIO:
-            parts.append("yakın")
+        # ── Proximity wording ──
+        if zone.estimated_distance_m is not None:
+            if zone.estimated_distance_m < VERY_CLOSE_M:
+                parts.append("çok yakın")
+            elif zone.estimated_distance_m < NEARBY_M:
+                parts.append("yakın")
+            # > NEARBY_M: no proximity word
+        else:
+            # Fallback: pixel-ratio heuristic (e.g. unit tests with no camera_geom)
+            if zone.pixel_ratio > VERY_CLOSE_RATIO:
+                parts.append("çok yakın")
+            elif zone.pixel_ratio > NEARBY_RATIO:
+                parts.append("yakın")
 
         # Direction
         if zone.dominant_zone == "left":
@@ -383,17 +468,21 @@ class PerceptionPipeline:
         model_path: str,
         input_h: int = 384,
         input_w: int = 512,
+        camera_geometry: Optional[CameraGeometry] = None,
     ):
         """
         Args:
-            model_path: Path to .trt/.engine or .onnx model file.
-            input_h:    Model input height (must match training).
-            input_w:    Model input width (must match training).
+            model_path:      Path to .trt/.engine or .onnx model file.
+            input_h:         Model input height (must match training).
+            input_w:         Model input width (must match training).
+            camera_geometry: Optional CameraGeometry for distance estimation.
+                             When None, alerts use the pixel-ratio heuristic.
         """
         logger.info(f"[Perception] Loading model: {model_path}")
         self._backend = _load_backend(model_path)
         self._input_h = input_h
         self._input_w = input_w
+        self._camera_geometry = camera_geometry
 
         # Per-class cooldown tracker (class_id → last alert unix time)
         self._last_alert_time: dict[int, float] = {}
@@ -425,7 +514,7 @@ class PerceptionPipeline:
         mask = postprocess(logits)
 
         # 4. Scene analysis
-        scene = analyse_scene(mask)
+        scene = analyse_scene(mask, camera_geom=self._camera_geometry)
 
         # 5. Generate alerts
         alerts = generate_alerts(scene, self._last_alert_time, now)
