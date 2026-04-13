@@ -68,10 +68,11 @@ class PerceptionThread(threading.Thread):
       preprocess → TensorRT/ONNX inference → postprocess → scene analysis → alert generation
     """
 
-    def __init__(self, config: ALASConfig, stop_event: threading.Event):
+    def __init__(self, config: ALASConfig, stop_event: threading.Event, nav: "NavigationSystem | None" = None):
         super().__init__(name="Perception", daemon=True)
         self.config = config
         self._stop = stop_event
+        self._nav = nav
         self._pipeline: PerceptionPipeline | None = None
         # Pause perception while TTS is speaking a nav instruction
         # (avoids "obstacle ahead" interrupting "turn right in 50m")
@@ -122,13 +123,33 @@ class PerceptionThread(threading.Thread):
             # ── Run full pipeline ──
             result = self._pipeline.process(frame)
 
-            # ── Speak alerts ──
-            for alert in result.alerts:
-                speak(alert)
+            # ── Build and speak a single combined message ──────────────────
+            # Strategy:
+            #   1. Always lead with path guidance (optimal direction).
+            #   2. Append the single highest-priority hazard, if any.
+            #   3. Crosswalk is only announced when navigation is active.
+            #   4. If no walkable path found, fall back to the top hazard alert.
 
-            # ── Speak path guidance (only when scene is safe and no alerts) ──
-            if result.path_guidance and not result.alerts and result.scene.is_safe:
-                speak(result.path_guidance)
+            nav_active = self._nav is not None and self._nav.is_active
+
+            # Filter alerts: drop crosswalk when not navigating
+            filtered_alerts = [
+                a for a in result.alerts
+                if not (
+                    "geçidi" in a
+                    and not nav_active
+                )
+            ]
+
+            top_hazard = filtered_alerts[0] if filtered_alerts else None
+
+            if result.path_guidance:
+                if top_hazard:
+                    speak(f"{result.path_guidance} — {top_hazard}")
+                else:
+                    speak(result.path_guidance)
+            elif top_hazard:
+                speak(top_hazard)
 
             # Log scene summary periodically
             if not result.scene.is_safe:
@@ -531,7 +552,7 @@ def main() -> None:
     # ── 5. Perception thread ─────────────────────────────────────
     perception = None
     if not args.no_camera:
-        perception = PerceptionThread(config, stop_event)
+        perception = PerceptionThread(config, stop_event, nav=nav)
         perception.start()
         logger.info("[Main] Perception thread started.")
 
