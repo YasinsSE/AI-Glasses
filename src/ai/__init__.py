@@ -1,0 +1,1 @@
+# ai paket tanimlamasi
