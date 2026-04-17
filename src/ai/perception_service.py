@@ -46,12 +46,14 @@ class PerceptionService(threading.Thread):
         voice: VoicePolicy,
         modes: ModeManager,
         stop_event: threading.Event,
+        nav=None,
     ) -> None:
         super().__init__(name="PerceptionService", daemon=True)
         self._config = config
         self._voice = voice
         self._modes = modes
         self._stop = stop_event
+        self._nav = nav  # NavigationSystem reference for crosswalk filtering
 
         self._pipeline: Optional[PerceptionPipeline] = None
         self._cap = None  # cv2.VideoCapture, lazy import
@@ -153,8 +155,23 @@ class PerceptionService(threading.Thread):
                 self._stop.wait(0.5)
                 continue
 
-            for alert in result.alerts:
-                self._voice.say_obstacle(alert)
+            # Filter alerts: crosswalk only announced when navigation is active
+            nav_active = self._nav is not None and self._nav.is_active
+            filtered_alerts = [
+                a for a in result.alerts
+                if not ("geçidi" in a and not nav_active)
+            ]
+            top_hazard = filtered_alerts[0] if filtered_alerts else None
+
+            if result.path_guidance:
+                combined = (
+                    f"{result.path_guidance} — {top_hazard}"
+                    if top_hazard
+                    else result.path_guidance
+                )
+                self._voice.say_obstacle(combined)
+            elif top_hazard:
+                self._voice.say_obstacle(top_hazard)
 
             if not result.scene.is_safe:
                 logger.info(
