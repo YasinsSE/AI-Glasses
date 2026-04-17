@@ -5,21 +5,19 @@ ALAS — AI-Based Smart Glasses Main Loop
 Thin orchestrator. Reads as a recipe; every step is one constructor call
 followed by ``start()``. The how-to of each subsystem lives in its module:
 
-    Perception      → ai/perception_service.py
-    Navigation      → navigation/navigation_service.py
-    Voice commands  → tts_stt/voice_commands.py
-    Button input    → tts_stt/button_listener.py
-    TTS gating      → tts_stt/voice_policy.py
-    Modes/shutdown  → main/lifecycle.py
+    Perception      -> ai/perception_service.py
+    Navigation      -> navigation/navigation_service.py
+    Voice commands  -> tts_stt/voice_commands.py
+    Button input    -> tts_stt/button_listener.py
+    TTS gating      -> tts_stt/voice_policy.py
+    Modes/shutdown  -> main/lifecycle.py
 
 Run on Jetson Nano:
     cd src && python -m main.alas_main --model models/segmentation/alas_engine.trt
 
-Desktop test (no GPIO / GPS / camera):
-    cd src && python -m main.alas_main --mock --no-camera
+Desktop test (no GPIO / GPS / camera / microphone):
+    cd src && python -m main.alas_main --mock --no-camera --bypass-stt --bypass-warmup
 """
-
-#from __future__ import annotations
 
 import logging
 import os
@@ -38,7 +36,6 @@ from navigation.navigation_service import NavigationService
 from navigation.router import NavigationSystem, NavConfig
 from navigation.sensors import GPSReader, MockGPSReader
 from tts_stt.button_listener import ButtonListener
-#from tts_stt.stt import STTEngine
 from tts_stt.voice_commands import VoiceCommandHandler
 from tts_stt.voice_policy import VoicePolicy
 
@@ -50,17 +47,30 @@ logging.basicConfig(
 logger = logging.getLogger("ALAS")
 
 
-def main() -> None:
-    # ── 1. Config & lifecycle ────────────────────────────────────
+def _load_stt(config):
+    """Load STTEngine only when not bypassed. Returns None when bypassed."""
+    if config.bypass_stt:
+        logger.info("[Main] --bypass-stt active: microphone disabled, typed input only.")
+        return None
+    try:
+        from tts_stt.stt import STTEngine
+        return STTEngine()
+    except Exception:
+        logger.exception("[Main] STTEngine could not be loaded — falling back to bypass mode.")
+        return None
+
+
+def main():
+    # -- 1. Config & lifecycle ------------------------------------------------
     config = ALASConfig.from_cli()
     stop_event = lifecycle.install_signal_handlers()
     modes = lifecycle.ModeManager(initial=SystemMode.WARMUP)
 
-    # ── 2. Voice policy (owns all TTS) ───────────────────────────
+    # -- 2. Voice policy (owns all TTS) ---------------------------------------
     voice = VoicePolicy(config)
     voice.announce_boot()
 
-    # ── 3. GPS sensor ────────────────────────────────────────────
+    # -- 3. GPS sensor --------------------------------------------------------
     gps = (
         MockGPSReader()
         if config.mock
@@ -72,13 +82,13 @@ def main() -> None:
     )
     gps.start()
 
-    # ── 4. Navigation core (pure domain object, no threads) ──────
+    # -- 4. Navigation core (pure domain object, no threads) ------------------
     nav = NavigationSystem(config.osm_map_path, NavConfig(log_dir=config.log_dir))
 
-    # ── 5. Speech recognition engine ─────────────────────────────
-    #stt = STTEngine()
-    stt = None
-    # ── 6. Background services ───────────────────────────────────
+    # -- 5. Speech recognition engine (optional) ------------------------------
+    stt = _load_stt(config)
+
+    # -- 6. Background services -----------------------------------------------
     perception = (
         None if config.no_camera
         else PerceptionService(config, voice, modes, stop_event, nav=nav)
@@ -90,7 +100,7 @@ def main() -> None:
         on_press=commands.handle_press,
         modes=modes,
         stop_event=stop_event,
-        mock= True,#config.mock,
+        mock=config.mock,
     )
 
     if perception is not None:
@@ -98,18 +108,22 @@ def main() -> None:
     navigation.start()
     button.start()
 
-    # ── 7. Wait for warmup → ACTIVE ──────────────────────────────
-    lifecycle.await_ready(
-        modes, gps, perception, voice,
-        timeout_sec=config.warmup_timeout_sec,
-    )
+    # -- 7. Wait for warmup -> ACTIVE -----------------------------------------
+    if config.bypass_warmup:
+        logger.info("[Main] --bypass-warmup active: skipping sensor readiness check.")
+        modes.transition_to(SystemMode.ACTIVE)
+    else:
+        lifecycle.await_ready(
+            modes, gps, perception, voice,
+            timeout_sec=config.warmup_timeout_sec,
+        )
     voice.announce_ready()
-    logger.info("[Main] ════════ ALAS SYSTEM READY ════════")
+    logger.info("[Main] ======== ALAS SYSTEM READY ========")
 
-    # ── 8. Idle until shutdown ───────────────────────────────────
+    # -- 8. Idle until shutdown -----------------------------------------------
     lifecycle.wait_for_shutdown(stop_event)
 
-    # ── 9. Graceful shutdown ─────────────────────────────────────
+    # -- 9. Graceful shutdown -------------------------------------------------
     lifecycle.shutdown(
         button=button,
         services=[perception, navigation],
@@ -118,7 +132,7 @@ def main() -> None:
         voice=voice,
         modes=modes,
     )
-    logger.info("[Main] ════════ ALAS SYSTEM STOPPED ════════")
+    logger.info("[Main] ======== ALAS SYSTEM STOPPED ========")
 
 
 if __name__ == "__main__":

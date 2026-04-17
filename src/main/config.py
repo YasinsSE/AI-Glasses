@@ -57,9 +57,11 @@ class ALASConfig:
     warmup_timeout_sec: float = 90.0      # await_ready max wait before forcing ACTIVE
     sleep_idle_timeout_sec: float = 0.0   # 0 = never auto-sleep; >0 enables idle-sleep
 
-    # ── Runtime flags (set by --mock / --no-camera) ──────────────
+    # ── Runtime flags (set by --mock / --no-camera / --bypass-*) ─
     mock: bool = False
     no_camera: bool = False
+    bypass_stt: bool = False       # skip STT/microphone — voice commands typed via stdin
+    bypass_warmup: bool = False    # skip GPS/model warmup — jump straight to ACTIVE
 
     # ── General ──────────────────────────────────────────────────
     log_dir: str = "src/logs"
@@ -81,6 +83,10 @@ class ALASConfig:
         parser.add_argument("--gps-port",  default=None, help="GPS serial port")
         parser.add_argument("--mock",      action="store_true", help="Desktop test mode (no GPIO/GPS)")
         parser.add_argument("--no-camera", action="store_true", help="Disable perception thread")
+        parser.add_argument("--bypass-stt",    action="store_true",
+                            help="Skip microphone — voice commands typed via keyboard")
+        parser.add_argument("--bypass-warmup", action="store_true",
+                            help="Skip GPS/model warmup — jump straight to ACTIVE mode")
         args = parser.parse_args(argv)
 
         config = cls()
@@ -96,4 +102,6 @@ class ALASConfig:
             config.gps_port = args.gps_port
         config.mock = args.mock
         config.no_camera = args.no_camera
+        config.bypass_stt = args.bypass_stt
+        config.bypass_warmup = args.bypass_warmup
         return config
