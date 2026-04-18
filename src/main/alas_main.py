@@ -91,7 +91,7 @@ def main():
     # -- 6. Background services -----------------------------------------------
     perception = (
         None if config.no_camera
-        else PerceptionService(config, voice, modes, stop_event)
+        else PerceptionService(config, voice, modes, stop_event, nav=nav)
     )
     navigation = NavigationService(config, nav, gps, voice, modes, stop_event)
     commands = VoiceCommandHandler(config, nav, gps, stt, voice, modes, stop_event)

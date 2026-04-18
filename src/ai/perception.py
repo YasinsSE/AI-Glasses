@@ -83,8 +83,8 @@ CLASS_ALERT_CONFIG= {
     ClassID.VEHICLE_ROAD:       {"priority": 4, "alert": "Dikkat, araç yolu, girmeyin",                  "cooldown": 5.0},
     ClassID.COLLISION_OBSTACLE: {"priority": 3, "alert": "Önünüzde engel var, durun veya yön değiştirin","cooldown": 3.0},
     ClassID.FALL_HAZARD:        {"priority": 3, "alert": "Zemin tehlikesi, yavaşlayın",                  "cooldown": 3.0},
-    ClassID.DYNAMIC_HAZARD:     {"priority": 4, "alert": "Hareketli tehlike yakınızda",                  "cooldown": 4.0},
-    ClassID.VEHICLE:            {"priority": 5, "alert": "Durun, araç algılandı",                        "cooldown": 1.5},
+    ClassID.DYNAMIC_HAZARD:     {"priority": 4, "alert": "Nesne algılandı",                              "cooldown": 4.0},
+    ClassID.VEHICLE:            {"priority": 5, "alert": "Durun, önünüzde engel var",                   "cooldown": 1.5},
 }
 
 # Minimum pixel ratio for a class to trigger an alert
@@ -149,6 +149,7 @@ class PerceptionResult:
     mask: np.ndarray             # class-ID mask (H_model, W_model)
     inference_ms: float          # TRT/ONNX inference time
     total_ms: float              # full pipeline time
+    path_guidance: Optional[str] = None  # directional walking instruction, or None
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -430,6 +431,79 @@ def generate_alerts(
     return [text for _, text in raw]
 
 
+# ── Path guidance constants ──────────────────────────────────────────────────
+PATH_BOTTOM_FRACTION   = 0.5   # maskenin alt yarısına bak (kullanıcıya en yakın zemin)
+CORRIDOR_MARGIN        = 0.15  # sol ve sağ kenarda bu kadar piksel yoksay —
+                                # kullanıcı zaten oraya yürümeyecek
+MIN_WALKABLE_FOR_GUIDANCE = 0.08  # koridorda bu oranın altındaysa "yol daralıyor" uyarısı
+
+
+def generate_path_guidance(mask: np.ndarray) -> Optional[str]:
+    """
+    Maskenin alt yarısındaki merkezi yürüyüş koridorunu analiz ederek
+    yön kılavuzu üretir.
+
+    Algoritma:
+      1. Alt yarıyı al (kullanıcıya en yakın zemin bölgesi).
+      2. Sol ve sağ kenar piksellerini yoksay (CORRIDOR_MARGIN).
+         — Kullanıcı ekranın tam kenarına yürümez, oradaki walkable
+           pikseller centroid'i yanıltır.
+      3. Koridoru 3 eşit dilime böl (sol / orta / sağ).
+      4. Her dilimin walkable piksel sayısını karşılaştır:
+         - Orta dilim yeterliyse → "Düz yürüyün"
+         - Değilse en dolu yana yönlendir.
+      5. Toplam walkable oranı düşükse "yol daralıyor" ekle.
+
+    Returns:
+        "Düz yürüyün", "Hafif sola yönelin", "Hafif sağa yönelin" gibi
+        Türkçe TTS metni; hiç walkable yoksa None.
+    """
+    h, w = mask.shape
+    bottom_start = int(h * (1.0 - PATH_BOTTOM_FRACTION))
+    bottom = mask[bottom_start:, :]
+
+    # Merkezi koridor: sol/sağ kenar piksellerini çıkar
+    c_left  = int(w * CORRIDOR_MARGIN)
+    c_right = int(w * (1.0 - CORRIDOR_MARGIN))
+    corridor = bottom[:, c_left:c_right]
+    corridor_w = c_right - c_left
+
+    walkable    = (corridor == ClassID.WALKABLE_SURFACE)
+    walkable_px = float(np.sum(walkable))
+
+    if walkable_px == 0:
+        return None
+
+    walkable_ratio = walkable_px / float(corridor.size)
+    if walkable_ratio < MIN_WALKABLE_FOR_GUIDANCE:
+        return "Yürünebilir alan çok azalıyor, dikkatli ilerleyin"
+
+    # Koridoru 3 dilime böl ve her dilimin walkable piksel yoğunluğunu hesapla
+    third = corridor_w // 3
+    left_px   = float(np.sum(walkable[:, :third]))
+    center_px = float(np.sum(walkable[:, third: 2 * third]))
+    right_px  = float(np.sum(walkable[:, 2 * third:]))
+
+    left_ratio   = left_px   / float(walkable[:, :third].size)
+    center_ratio = center_px / float(walkable[:, third: 2 * third].size)
+    right_ratio  = right_px  / float(walkable[:, 2 * third:].size)
+
+    narrow_suffix = ", yol daralıyor" if walkable_ratio < 0.18 else ""
+
+    # Orta dilim yeterliyse düz git
+    if center_ratio >= 0.40:
+        return "Düz yürüyün" + narrow_suffix
+
+    # Orta yetersiz — hangi yan daha dolu?
+    if left_ratio > right_ratio:
+        return "Hafif sola yönelin" + narrow_suffix
+    if right_ratio > left_ratio:
+        return "Hafif sağa yönelin" + narrow_suffix
+
+    # Eşit veya belirsiz
+    return "Düz yürüyün" + narrow_suffix
+
+
 def render_overlay(
     frame_bgr: np.ndarray,
     mask: np.ndarray,
@@ -519,6 +593,9 @@ class PerceptionPipeline:
         # 5. Generate alerts
         alerts = generate_alerts(scene, self._last_alert_time, now)
 
+        # 6. Path guidance
+        guidance = generate_path_guidance(mask)
+
         total_ms = (time.monotonic() - t_start) * 1000
 
         return PerceptionResult(
@@ -527,6 +604,7 @@ class PerceptionPipeline:
             mask=mask,
             inference_ms=inference_ms,
             total_ms=total_ms,
+            path_guidance=guidance,
         )
 
     def reset_cooldowns(self) -> None:
