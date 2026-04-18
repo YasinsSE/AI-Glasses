@@ -321,11 +321,8 @@ class GPSReader:
             hdop = float(p[8]) if p[8] else 99.9
 
             with self._lock:
-                self._pending_gga = {
-                    "utc": utc,
-                    "sats": sats,
-                    "hdop": hdop,
-                }
+                    self._confirmed_meta["sats"] = sats
+                    self._confirmed_meta["hdop"] = hdop
         except (ValueError, IndexError):
             pass
 
@@ -353,15 +350,6 @@ class GPSReader:
             speed = 0.0
 
         with self._lock:
-            if (
-                self._pending_gga is not None
-                and rmc_utc
-                and self._pending_gga["utc"] == rmc_utc
-            ):
-                self._confirmed_meta["sats"] = self._pending_gga["sats"]
-                self._confirmed_meta["hdop"] = self._pending_gga["hdop"]
-                self._pending_gga = None
-
             current_sats = self._confirmed_meta["sats"]
             current_hdop = self._confirmed_meta["hdop"]
 

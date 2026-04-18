@@ -6,7 +6,7 @@
 #
 # Usage:
 #   python src/ai/live_seg_viewer.py --model models/segmentation/alas_engine.trt --gstreamer
-#   python src/ai/live_seg_viewer.py --model models/segmentation/alas_engine.trt --gstreamer --fps 10
+#   python3 src/ai/test_seg_inference.py --model models/segmentation/alas_engine.trt --gstreamer --fps 10
 #   python src/ai/live_seg_viewer.py --model models/segmentation/alas_model.onnx
 # =============================================================================
 

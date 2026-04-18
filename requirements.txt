@@ -1,0 +1,32 @@
+# ALAS - AI-Based Smart Glasses
+# Jetson Nano (Ubuntu 18.04, Python 3.6+)
+#
+# Install: pip install -r requirements.txt
+# Note: TensorRT and pycuda come pre-installed with JetPack SDK on Jetson Nano.
+#       Do NOT pip install them — use the system versions.
+
+# -- Core (required on all platforms) --
+numpy>=1.16
+opencv-python>=4.1
+pyttsx3>=2.90
+
+# -- GPS (Jetson Nano only, skip on Mac with --mock) --
+pyserial>=3.4
+
+# -- Speech recognition --
+vosk>=0.3.31
+pyaudio>=0.2.11
+
+# -- Intent classification (choose one) --
+# Option A: sklearn-based (works everywhere, lighter)
+scikit-learn>=0.20
+
+# Option B: MLX-based (Apple Silicon only, for dev/training)
+# mlx>=0.0.6
+# mlx-lm>=0.0.6
+# huggingface_hub>=0.19
+
+# -- Jetson-specific (pre-installed via JetPack, do NOT pip install) --
+# tensorrt         (JetPack)
+# pycuda           (JetPack)
+# Jetson.GPIO      (JetPack)

@@ -134,8 +134,10 @@ def main():
         port=port,
         baudrate=args.baud,
         warmup_sec=args.warmup,
-    ) as gps:
+        min_sats=0,      # EKLENEN SATIR: Uydu limitini test için sıfırla
+        max_hdop=99.0    # EKLENEN SATIR: Hata payı limitini test için sonuna kadar aç
 
+    ) as gps:
         logger.info(f"GPS başlatıldı. {args.warmup}sn warmup...")
         t0 = time.time()
 
