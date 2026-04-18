@@ -5,6 +5,7 @@ Thumbs.db
 # IDE & Editors
 .idea/
 .vscode/
+.claude/
 *.iml
 *.swp
 *.swo
