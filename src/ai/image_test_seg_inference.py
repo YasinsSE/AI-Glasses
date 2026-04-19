@@ -404,9 +404,11 @@ def run_image(model_path, image_path, input_h=384, input_w=512, save=False):
     # Save if requested
     if save:
         stem = Path(image_path).stem
-        out_overlay = "result_{}_overlay.jpg".format(stem)
-        out_mask = "result_{}_mask.png".format(stem)
-        out_combined = "result_{}_combined.jpg".format(stem)
+        out_dir = Path("outputs/segmentation_samples")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_overlay = str(out_dir / "result_{}_overlay.jpg".format(stem))
+        out_mask = str(out_dir / "result_{}_mask.png".format(stem))
+        out_combined = str(out_dir / "result_{}_combined.jpg".format(stem))
 
         cv2.imwrite(out_overlay, overlay)
         cv2.imwrite(out_mask, mask)

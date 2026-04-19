@@ -1,7 +1,7 @@
 # gps_reader.py
-# Arka plan thread'inde UART'tan NMEA okur, fix biriktirir.
-# get_coord() → (lat, lon, age_sec) veya None
-# get_health() → GPSHealth
+# Background-thread NMEA reader for the NEO-7M UART module.
+# get_coord()  -> (lat, lon, age_sec) or None
+# get_health() -> GPSHealth
 
 import logging
 import threading
@@ -66,26 +66,24 @@ def _to_decimal(raw: str, hemi: str) -> Optional[float]:
         return None
 
 
-# ── Sabitler ──────────────────────────────────────────────────
-
+# Constants
 MAX_SERIAL_ERRORS = 10
 RECONNECT_WAIT_SEC = 3.0
 MAX_BACKOFF_SEC = 5.0
 
 
 class GPSReader:
-    """
-    NEO-7M UART okuyucu.
+    """NEO-7M UART NMEA reader.
 
     Args:
-        port:          Serial port (Jetson Nano: /dev/ttyTHS1)
-        baudrate:      NEO-7M default 9600
-        timeout:       Serial read timeout (sn)
-        window:        Fix biriktirme penceresi (sn)
-        min_sats:      Minimum uydu sayısı
-        max_hdop:      Maksimum HDOP
-        max_speed_kmh: Yürüyüş hız limiti
-        warmup_sec:    Cold start bekleme süresi (sn)
+        port:          Serial port (Jetson Nano: /dev/ttyTHS1).
+        baudrate:      NEO-7M default 9600.
+        timeout:       Serial read timeout in seconds.
+        window:        Sliding window over which fixes are accumulated.
+        min_sats:      Minimum satellites required for an OK fix.
+        max_hdop:      Maximum HDOP accepted as OK.
+        max_speed_kmh: Walking-speed limit used by the outlier filter.
+        warmup_sec:    Cold-start wait before publishing health.
     """
 
     def __init__(
@@ -137,7 +135,7 @@ class GPSReader:
             timeout=self.timeout,
         )
         self._serial_ok = True
-        logger.info(f"GPS açıldı: {self.port} @ {self.baudrate}")
+        logger.info(f"GPS opened: {self.port} @ {self.baudrate}")
 
         self._start_time = time.monotonic()
 
@@ -156,7 +154,7 @@ class GPSReader:
         if self._ser and self._ser.is_open:
             self._ser.close()
         self._serial_ok = False
-        logger.info("GPS kapatıldı.")
+        logger.info("GPS closed.")
 
     def __enter__(self):
         self.start()
@@ -169,11 +167,10 @@ class GPSReader:
     # ── Public API ────────────────────────────────────────────
 
     def get_coord(self) -> Optional[Tuple[float, float, float]]:
-        """
-        Filtrelenmiş koordinat döndür.
+        """Return the latest filtered coordinate or None.
 
         Returns:
-            (lat, lon, age_sec) veya None
+            (lat, lon, age_sec) or None when no fix is available yet.
         """
         now = time.monotonic()
 
@@ -302,9 +299,9 @@ class GPSReader:
                 timeout=self.timeout,
             )
             self._serial_ok = True
-            logger.info(f"Serial reconnect başarılı: {self.port}")
+            logger.info(f"Serial reconnect succeeded: {self.port}")
         except (serial.SerialException, OSError) as e:
-            logger.error(f"Serial reconnect başarısız: {e}")
+            logger.error(f"Serial reconnect failed: {e}")
             self._serial_ok = False
 
     def _parse_gga(self, line: str) -> None:

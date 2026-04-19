@@ -405,7 +405,7 @@ def run_live(
     last_alert_time = {}
     frame_count = 0
     show_raw_mask = False
-    snap_dir = Path("snapshots")
+    snap_dir = Path("outputs/snapshots")
 
     # EMA for smooth FPS display
     ema_fps = target_fps

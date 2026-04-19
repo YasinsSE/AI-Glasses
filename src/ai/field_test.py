@@ -326,7 +326,7 @@ def run(model_path, cam_id=0, target_fps=8.0, duration=0, gst=False,
 
     # Output dir
     ts = time.strftime("%Y%m%d_%H%M%S")
-    out = Path("field_test_{}".format(ts))
+    out = Path("outputs/field_tests/{}".format(ts))
     fdir = out / "frames"
     fdir.mkdir(parents=True, exist_ok=True)
 

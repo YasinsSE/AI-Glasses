@@ -59,6 +59,7 @@ class NavigationService(threading.Thread):
         self._last_spoken: str = ""
         self._last_progress_time: float = 0.0
         self._prewarned_step_id: Optional[int] = None
+        self._stale_announced: bool = False
 
     # ── Thread entry point ───────────────────────────────────────
 
@@ -75,7 +76,14 @@ class NavigationService(threading.Thread):
                 self._stop.wait(self._config.gps_update_interval)
                 continue
 
-            lat, lon, _age = fix
+            lat, lon, age = fix
+            if age > self._config.gps_stale_threshold_sec:
+                if not self._stale_announced:
+                    self._voice.say_nav("GPS sinyali zayıf, konum güncellenemiyor.")
+                    self._stale_announced = True
+                self._stop.wait(self._config.gps_update_interval)
+                continue
+            self._stale_announced = False
             try:
                 result = self._nav.update(Coord(lat, lon))
             except Exception:  # noqa: BLE001

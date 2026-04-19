@@ -77,6 +77,10 @@ class VoiceCommandHandler:
         self._modes = modes
         self._stop = stop_event
 
+    def set_stt(self, stt):
+        # Single-reference attribute write; safe without a lock in CPython.
+        self._stt = stt
+
     # -- Button-press entry point -------------------------------------------
 
     def handle_press(self):
@@ -92,6 +96,12 @@ class VoiceCommandHandler:
 
         # Only run STT in ACTIVE mode (skip during WARMUP).
         if self._modes.mode != SystemMode.ACTIVE:
+            return
+
+        # STT may still be loading on a background thread; refuse the press
+        # rather than silently falling into the keyboard-bypass path.
+        if self._stt is None and not self._config.bypass_stt:
+            self._voice.say_prompt("Konuşma motoru hâlâ yükleniyor.")
             return
 
         # -- Get text: either via microphone (STT) or keyboard (bypass) -----

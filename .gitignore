@@ -40,6 +40,9 @@ alas_env/
 *.bak
 *.orig
 
+# Generated outputs (snapshots, field tests, inference results)
+outputs/
+
 # Data & Datasets
 data/
 datasets/

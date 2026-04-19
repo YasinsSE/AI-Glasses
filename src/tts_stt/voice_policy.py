@@ -49,6 +49,10 @@ class VoicePolicy:
         self._lock = threading.Lock()
         self._speaking_priority = False
         self._suppress_obstacles_until = 0.0
+        # Set while a priority utterance is playing; perception waits on this
+        # event instead of polling so it wakes the instant TTS finishes.
+        self._idle_event = threading.Event()
+        self._idle_event.set()
 
     # ── High-level semantic methods ──────────────────────────────
 
@@ -97,6 +101,15 @@ class VoicePolicy:
         with self._lock:
             return self._speaking_priority
 
+    def in_post_nav_silence(self) -> bool:
+        """True while obstacle alerts are muted after a navigation utterance."""
+        with self._lock:
+            return time.monotonic() < self._suppress_obstacles_until
+
+    def wait_until_idle(self, timeout: float) -> bool:
+        """Block until no priority utterance is playing, or timeout elapses."""
+        return self._idle_event.wait(timeout)
+
     # ── Lifecycle ────────────────────────────────────────────────
 
     def flush(self) -> None:
@@ -110,9 +123,11 @@ class VoicePolicy:
     def _priority_speak(self, text: str) -> None:
         with self._lock:
             self._speaking_priority = True
+        self._idle_event.clear()
         try:
             speak(text)
             wait_until_done()
         finally:
             with self._lock:
                 self._speaking_priority = False
+            self._idle_event.set()

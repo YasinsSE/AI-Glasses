@@ -1,33 +1,28 @@
-"""
-Test path guidance — iki mod:
+"""Path-guidance integration test — runs in two modes.
 
-══════════════════════════════════════════════════════════════════
- FOTOĞRAF MODU
- • Model gerekmez.
- • Daha önce kaydedilmiş renkli overlay görselleri ile çalışır.
-   (result_test1_overlay.jpg, result_test2_overlay.jpg vb.)
- • Renkleri piksel bazında class ID'ye dönüştürür (rgb_to_mask).
+Image mode (no model required):
+    Replays a previously saved color overlay (result_*_overlay.jpg) by
+    converting per-pixel colors back to class IDs and feeding the mask
+    into generate_path_guidance().
 
- Nasıl çalıştırılır:
-   cd /Users/mehmet/Desktop/ai-glasses-1/AI-Glasses
-   venv/bin/python test_guidance_from_overlay.py result_test1_overlay.jpg
-   venv/bin/python test_guidance_from_overlay.py result_test1_overlay.jpg --nav
-     └─ --nav : navigasyonu aktif simüle eder (yaya geçidi sesli bildirilir)
+        python tests/ai_test/test_guidance_from_overlay.py \
+            outputs/segmentation_samples/result_test1_overlay.jpg
+        python tests/ai_test/test_guidance_from_overlay.py \
+            outputs/segmentation_samples/result_test1_overlay.jpg --nav
 
-══════════════════════════════════════════════════════════════════
- KAMERA MODU (PerceptionPipeline)
- • Gerçek segmentasyon modeli (.onnx veya .trt/.engine) gerekir.
- • Kameradan canlı frame alır, modeli çalıştırır, overlay gösterir.
- • Yön kılavuzu hem ekrana hem terminale yazılır.
- • Çıkmak için 'q' tuşuna basın.
+    --nav simulates an active navigation session, so crosswalks are
+    announced (matches PerceptionService's runtime gating).
 
- Nasıl çalıştırılır:
-   cd /Users/mehmet/Desktop/ai-glasses-1/AI-Glasses
-   venv/bin/python test_guidance_from_overlay.py --camera --model models/segmentation/alas_engine.onnx
-   venv/bin/python test_guidance_from_overlay.py --camera --model models/segmentation/alas_engine.onnx --camera-index 1
-     └─ --camera-index : birden fazla kamera varsa indeks belirt (varsayılan: 0)
+Camera mode (PerceptionPipeline):
+    Requires a real segmentation engine (.onnx or .trt/.engine). Runs
+    live inference on the camera feed and prints/draws guidance.
 
-══════════════════════════════════════════════════════════════════
+        python tests/ai_test/test_guidance_from_overlay.py --camera \
+            --model models/segmentation/alas_engine.onnx
+        python tests/ai_test/test_guidance_from_overlay.py --camera \
+            --model models/segmentation/alas_engine.onnx --camera-index 1
+
+    Press 'q' to quit.
 """
 
 import argparse
@@ -37,7 +32,7 @@ import time
 
 import numpy as np
 
-# ── Class tanımları (perception.py ile aynı) ────────────────────────────────
+# Class definitions (must stay aligned with src/ai/perception.py).
 
 WALKABLE_SURFACE   = 0
 CROSSWALK          = 1

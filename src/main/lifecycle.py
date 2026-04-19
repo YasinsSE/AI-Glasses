@@ -96,11 +96,38 @@ def install_signal_handlers() -> threading.Event:
     return stop_event
 
 
-def wait_for_shutdown(stop_event: threading.Event) -> None:
-    """Idle the main thread until ``stop_event`` is set (or Ctrl+C)."""
+def wait_for_shutdown(
+    stop_event: threading.Event,
+    services=None,
+    voice=None,
+    poll_sec: float = 2.0,
+) -> None:
+    """Idle the main thread until ``stop_event`` is set (or Ctrl+C).
+
+    If ``services`` is provided, also watchdog them: when any service thread
+    dies unexpectedly, announce it via ``voice`` (once per service) and trigger
+    shutdown so the user is never left with a silent dead pipeline.
+    """
+    announced = set()
     try:
         while not stop_event.is_set():
-            stop_event.wait(timeout=1.0)
+            stop_event.wait(timeout=poll_sec)
+            if stop_event.is_set():
+                break
+            if not services:
+                continue
+            for service in services:
+                if service is None or service.name in announced:
+                    continue
+                if not service.is_alive():
+                    announced.add(service.name)
+                    logger.error("[Lifecycle] %s died — forcing shutdown.", service.name)
+                    if voice is not None:
+                        try:
+                            voice.emergency(f"{service.name} durdu, sistem kapanıyor.")
+                        except Exception:
+                            logger.exception("[Lifecycle] watchdog announce failed")
+                    stop_event.set()
     except KeyboardInterrupt:
         stop_event.set()
 
@@ -115,6 +142,7 @@ def await_ready(
     perception,
     voice,
     timeout_sec: float,
+    bypass_gps: bool = False,
 ) -> None:
     """
     Block until GPS reports a usable fix AND PerceptionService has finished
@@ -131,11 +159,14 @@ def await_ready(
     voice.announce_boot()  # idempotent — main() already called it once
 
     while time.monotonic() < deadline:
-        try:
-            gps_health = gps.get_health()
-            gps_ok = gps_health.status in (GPSStatus.OK, GPSStatus.LOW_ACCURACY)
-        except Exception:  # noqa: BLE001 — GPS may not be ready yet
-            gps_ok = False
+        if bypass_gps:
+            gps_ok = True
+        else:
+            try:
+                gps_health = gps.get_health()
+                gps_ok = gps_health.status in (GPSStatus.OK, GPSStatus.LOW_ACCURACY)
+            except Exception:  # noqa: BLE001 — GPS may not be ready yet
+                gps_ok = False
 
         model_ok = perception is None or perception.model_ready.is_set()
 
