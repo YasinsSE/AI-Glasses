@@ -137,6 +137,7 @@ def _process_one(
         guidance=guidance,
         blocked_threshold=planner._cfg.vfh_blocked_threshold,
         activated=activated,
+        near_rows_ratio=planner._cfg.vfh_near_rows_ratio,
     )
     return guidance, activated, overlay, scene
 
