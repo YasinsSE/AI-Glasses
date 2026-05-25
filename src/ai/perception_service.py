@@ -25,6 +25,7 @@ from ai.geometry import CameraGeometry
 from ai.perception import Alert, ClassID, PerceptionPipeline
 from main.config import ALASConfig
 from main.lifecycle import ModeManager, SystemMode
+from navigation.local_planner import VFHPlanner
 from tts_stt.voice_policy import VoicePolicy
 
 logger = logging.getLogger("ALAS.perception_service")
@@ -46,6 +47,7 @@ class PerceptionService(threading.Thread):
         modes: ModeManager,
         stop_event: threading.Event,
         nav=None,
+        vfh: Optional[VFHPlanner] = None,
     ) -> None:
         super().__init__(name="PerceptionService", daemon=True)
         self._config = config
@@ -53,6 +55,7 @@ class PerceptionService(threading.Thread):
         self._modes = modes
         self._stop = stop_event
         self._nav = nav  # NavigationSystem reference for crosswalk filtering.
+        self._vfh = vfh  # Optional local planner; None disables VFH guidance.
 
         self._pipeline: Optional[PerceptionPipeline] = None
         self._cap = None  # cv2.VideoCapture, lazy import.
@@ -61,6 +64,7 @@ class PerceptionService(threading.Thread):
         # they re-encounter the same hazard after walking away.
         self._last_spoken: Optional[tuple] = None
         self._last_path_guidance: Optional[tuple] = None
+        self._last_vfh: Optional[tuple] = None  # (text, monotonic timestamp)
         self.model_ready = threading.Event()
 
     # ── Camera helpers (private) ─────────────────────────────────
@@ -258,6 +262,12 @@ class PerceptionService(threading.Thread):
             result.path_guidance, nav_active, now,
         )
 
+        # VFH local planner: when triggered, its escape-route guidance is more
+        # actionable than the generic "Hafif sağa yönelin" — let it override.
+        vfh_text = self._select_vfh_guidance(result, nav_active, now)
+        if vfh_text is not None:
+            guidance_text = vfh_text
+
         if guidance_text and top_alert is not None:
             message = "{} — {}".format(guidance_text, top_alert.text)
         elif guidance_text:
@@ -315,6 +325,43 @@ class PerceptionService(threading.Thread):
             self._last_path_guidance = (guidance_text, now)
             return guidance_text
         return None
+
+    def _select_vfh_guidance(self, result, nav_active: bool, now: float) -> Optional[str]:
+        """Run the VFH local planner and return its TTS line, if any.
+
+        Suppressed when the planner is disabled, has no result this frame, or
+        the same escape line was already spoken within the cooldown window.
+        Target action (when global nav is active) biases sector selection
+        toward the next turn so the dodge stays on-route.
+        """
+        if self._vfh is None:
+            return None
+        target_action = None
+        if nav_active and self._nav is not None:
+            step = getattr(self._nav, "current_step", None)
+            if step is not None:
+                target_action = getattr(step, "action", None)
+        try:
+            guidance = self._vfh.plan(result.mask, result.scene, target_action=target_action)
+        except Exception:
+            logger.exception("[Perception] VFH plan failed")
+            return None
+        if guidance is None:
+            return None
+
+        logger.info(
+            "[Perception] VFH: action=%s sector=%d hist=%s",
+            guidance.action.value, guidance.sector_index,
+            ["%.2f" % h for h in guidance.histogram],
+        )
+
+        cooldown = self._config.vfh_announce_cooldown_sec
+        if self._last_vfh is not None:
+            last_text, last_ts = self._last_vfh
+            if guidance.text == last_text and (now - last_ts) < cooldown:
+                return None
+        self._last_vfh = (guidance.text, now)
+        return guidance.text
 
     def _should_speak(self, message: str, now: float) -> bool:
         """Dedupe identical consecutive utterances, but not forever.

@@ -64,6 +64,18 @@ class ALASConfig:
     path_guidance_cooldown_sec: float = 8.0 # Min gap between identical path guidance lines.
     gps_stale_threshold_sec: float = 10.0   # Treat a fix older than N s as stale.
 
+    # Local planner (VFH — Vector Field Histogram on segmentation mask)
+    vfh_enabled: bool = True
+    vfh_num_sectors: int = 7            # Odd → centre sector exists.
+    vfh_grid_rows: int = 8              # Near-field grid resolution (rows).
+    vfh_grid_cols: int = 16             # Near-field grid resolution (cols).
+    vfh_near_rows_ratio: float = 0.55   # Fraction of mask height (from bottom) treated as near-field.
+    vfh_blocked_threshold: float = 0.35 # Sector cost above this is "blocked".
+    vfh_activation_ratio: float = 0.06  # Centre obstacle pixel ratio below this → don't bother.
+    vfh_activation_distance_m: float = 5.0   # Vehicles closer than this trigger VFH even at low ratio.
+    vfh_low_walkable_ratio: float = 0.25     # Walkable area below this → trigger VFH.
+    vfh_announce_cooldown_sec: float = 6.0   # Min gap between identical VFH utterances.
+
     # Button (GPIO)
     button_pin: int = 18              # BCM pin number on Jetson Nano.
     button_debounce_ms: int = 300

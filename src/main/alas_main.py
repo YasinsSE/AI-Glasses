@@ -36,6 +36,7 @@ from main.config import ALASConfig
 from main.lifecycle import SystemMode
 from main.logging_config import configure_logging
 from ai.perception_service import PerceptionService
+from navigation.local_planner import VFHPlanner
 from navigation.navigation_service import NavigationService
 from navigation.router import NavigationSystem, NavConfig
 from navigation.sensors import build_gps
@@ -64,9 +65,14 @@ def main():
 
     # 5. Speech recognition engine — loaded on a background thread so the
     #    boot announcement (and nav warmup) are not blocked by Vosk model load.
+    # VFH local planner — image-space escape routing over the segmentation
+    # mask. None disables the override and PerceptionService falls back to
+    # plain path_guidance.
+    vfh = VFHPlanner(config) if config.vfh_enabled else None
+
     perception = (
         None if config.no_camera
-        else PerceptionService(config, voice, modes, stop_event, nav=nav)
+        else PerceptionService(config, voice, modes, stop_event, nav=nav, vfh=vfh)
     )
     navigation = NavigationService(config, nav, gps, voice, modes, stop_event)
     commands = VoiceCommandHandler(config, nav, gps, None, voice, modes, stop_event)
