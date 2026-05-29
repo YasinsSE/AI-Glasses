@@ -30,11 +30,11 @@ def _find_nearest_node(db: RoutingDB, coord: Coord) -> Tuple[Optional[Node], flo
 def _reconstruct_path(came_from, start, end):
     path = []
     curr = end
-    visited_nodes: set = set()                       # ← YENİ
+    visited_nodes: set = set()                       # Cycle guard.
     while curr != start:
-        if curr in visited_nodes:                    # ← YENİ
-            raise RuntimeError("Cycle detected...") # ← YENİ
-        visited_nodes.add(curr)                      # ← YENİ
+        if curr in visited_nodes:
+            raise RuntimeError("Cycle detected...")
+        visited_nodes.add(curr)
         parent, edge = came_from[curr]
         path.append((parent, edge))
         curr = parent
@@ -159,8 +159,8 @@ class RouteCalculator:
                 if neighbor not in cost_so_far or new_cost < cost_so_far[neighbor]:
                     cost_so_far[neighbor] = new_cost
                     heuristic = haversine_distance(neighbor.lat, neighbor.lon, end_node.lat, end_node.lon) / speed_ms
-                    counter += 1                             # ← YENİ
-                    heapq.heappush(open_set, (new_cost + heuristic, counter, neighbor)) # ← counter eklendi
+                    counter += 1
+                    heapq.heappush(open_set, (new_cost + heuristic, counter, neighbor))  # Counter breaks ties.
                     came_from[neighbor] = (current, edge)
 
         if end_node not in came_from:

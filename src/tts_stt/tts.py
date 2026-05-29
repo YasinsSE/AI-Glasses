@@ -1,28 +1,34 @@
+"""Text-to-speech output via pyttsx3, serialised through a worker thread.
+
+Each utterance is spoken in a short-lived subprocess so a hung pyttsx3 engine
+can never block the main program. A single background worker drains the queue
+so utterances never overlap.
+"""
+
 import subprocess
 import sys
 import threading
 import queue
-import os
-from pathlib import Path 
 
-# Kuyruk sistemi (Seslerin birbirini kesmemesi için)
+# Queue so utterances do not cut each other off.
 _tts_queue = queue.Queue()
 
+
 def _tts_worker():
-    """Arka planda seslendirme yapan işçi thread."""
+    """Worker thread that speaks queued text in the background."""
     while True:
         text = _tts_queue.get()
         if text is None:
             _tts_queue.task_done()
             break
 
-        # Jetson Nano ve Mac uyumlu sessiz çalıştırma scripti
-        # subprocess kullanarak ana programın donmasını engelliyoruz
+        # Jetson Nano / Mac compatible quiet runner. A subprocess is used so a
+        # stuck engine cannot freeze the main program.
         script = (
             "import pyttsx3\n"
             "try:\n"
             "    engine = pyttsx3.init()\n"
-            "    engine.setProperty('rate', 160)\n"  # Konuşma hızı
+            "    engine.setProperty('rate', 160)\n"  # Speech rate.
             "    engine.setProperty('volume', 1.0)\n"
             f"    engine.say({repr(text)})\n"
             "    engine.runAndWait()\n"
@@ -36,57 +42,57 @@ def _tts_worker():
                 stderr=subprocess.DEVNULL,
             )
         except Exception as e:
-            print(f"[TTS ERR] Seslendirme hatası: {e}")
+            print(f"[TTS ERR] Speech failure: {e}")
         finally:
             _tts_queue.task_done()
 
 
-# Worker thread'i başlat
+# Start the worker thread.
 _tts_thread = threading.Thread(target=_tts_worker, daemon=True)
 _tts_thread.start()
 
 
 def speak(text: str):
-    """Metni seslendirme kuyruğuna ekler."""
+    """Add text to the speech queue."""
     text = (text or "").strip()
     if text:
         _tts_queue.put(text)
 
+
 def wait_until_done():
-    """Kuyruktaki tüm seslerin bitmesini bekler."""
+    """Block until all queued utterances have been spoken."""
     _tts_queue.join()
 
+
 def shutdown_tts():
+    """Drain the queue, then stop the worker.
+
+    Must be called before the program exits.
     """
-    Kuyruktaki tüm seslerin bitmesini bekler, sonra worker'ı kapatır.
-    Program kapanmadan önce çağrılmalı.
-    """
-    _tts_queue.join()       # Bekleyen sesler bitsin
-    _tts_queue.put(None)    # Worker'a dur sinyali
+    _tts_queue.join()       # Let pending utterances finish.
+    _tts_queue.put(None)    # Signal the worker to stop.
     _tts_thread.join(timeout=5)
-    print("[TTS] Kapatıldı.")
+    print("[TTS] Shut down.")
 
 
 def handle_intent_response(intent: str, text: str = ""):
-    """
-    SLM'den gelen niyete göre kullanıcıya sesli geri bildirim verir.
-    """
+    """Speak feedback to the user based on the intent returned by the SLM."""
     responses = {
         "system_command": "Sistem kapatılıyor, iyi günler dilerim.",
         "navigation": "Anlaşıldı, rota hesaplanıyor.",
-        "general": "",  # Genel durumlarda sessiz kal
+        "general": "",  # Stay silent for general intents.
     }
 
     msg = responses.get(intent, "")
     if msg:
         speak(msg)
-    # NOT: general intent'te kullanıcının söylediği metni papağan gibi
-    # tekrar etmiyoruz. İleride LLM entegrasyonu ile anlamlı cevap
-    # üretilebilir (ör. "saat kaç" → gerçek saat bilgisi).
+    # NOTE: for the "general" intent we do not parrot the user's text back.
+    # A future LLM integration could generate a meaningful reply here
+    # (e.g. "what time is it" -> the actual time).
 
 
-# Modülün kendi başına test edilebilmesi için
+# Standalone module test.
 if __name__ == "__main__":
-    print("TTS Test Sistemi Başlatıldı...")
+    print("TTS test system started...")
     speak("Sistem hazır. Ses testi yapılıyor.")
     shutdown_tts()

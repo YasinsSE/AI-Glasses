@@ -54,7 +54,7 @@ class NavigationService(threading.Thread):
         self._gps = gps
         self._voice = voice
         self._modes = modes
-        self._stop = stop_event
+        self._stop_event = stop_event
 
         self._last_spoken: str = ""
         self._last_progress_time: float = 0.0
@@ -65,34 +65,34 @@ class NavigationService(threading.Thread):
 
     def run(self) -> None:
         logger.info("[Navigation] Service started.")
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             if self._modes.mode != SystemMode.ACTIVE or not self._nav.is_active:
-                self._stop.wait(self._config.gps_update_interval)
+                self._stop_event.wait(self._config.gps.update_interval)
                 continue
 
             fix = self._gps.get_coord()
             if fix is None:
                 self._log_gps_state()
-                self._stop.wait(self._config.gps_update_interval)
+                self._stop_event.wait(self._config.gps.update_interval)
                 continue
 
             lat, lon, age = fix
-            if age > self._config.gps_stale_threshold_sec:
+            if age > self._config.gps.stale_threshold_sec:
                 if not self._stale_announced:
                     self._voice.say_nav("GPS sinyali zayıf, konum güncellenemiyor.")
                     self._stale_announced = True
-                self._stop.wait(self._config.gps_update_interval)
+                self._stop_event.wait(self._config.gps.update_interval)
                 continue
             self._stale_announced = False
             try:
                 result = self._nav.update(Coord(lat, lon))
             except Exception:  # noqa: BLE001
                 logger.exception("[Navigation] nav.update failed")
-                self._stop.wait(self._config.gps_update_interval)
+                self._stop_event.wait(self._config.gps.update_interval)
                 continue
 
             self._announce(result)
-            self._stop.wait(self._config.gps_update_interval)
+            self._stop_event.wait(self._config.gps.update_interval)
 
         logger.info("[Navigation] Stopped.")
 
@@ -123,7 +123,7 @@ class NavigationService(threading.Thread):
 
         # (a) Approach pre-warning — fires once per step
         if (
-            dist <= self._config.approach_threshold_m
+            dist <= self._config.nav.approach_threshold_m
             and self._prewarned_step_id != step.step_id
         ):
             self._voice.say_nav(f"{int(dist)} metre sonra {step.text}")
@@ -132,9 +132,9 @@ class NavigationService(threading.Thread):
             return
 
         # (b) Long-stretch reminder — periodic distance ping
-        if dist >= self._config.long_stretch_threshold_m:
+        if dist >= self._config.nav.long_stretch_threshold_m:
             now = time.monotonic()
-            if (now - self._last_progress_time) > self._config.progress_announce_interval:
+            if (now - self._last_progress_time) > self._config.nav.progress_announce_interval:
                 self._voice.say_progress(f"Hedefe {int(dist)} metre.")
                 self._last_progress_time = now
         # (c) Mid-range silence — fall through, no speech.

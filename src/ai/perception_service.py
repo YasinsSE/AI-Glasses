@@ -53,7 +53,7 @@ class PerceptionService(threading.Thread):
         self._config = config
         self._voice = voice
         self._modes = modes
-        self._stop = stop_event
+        self._stop_event = stop_event
         self._nav = nav  # NavigationSystem reference for crosswalk filtering.
         self._vfh = vfh  # Optional local planner; None disables VFH guidance.
 
@@ -72,10 +72,10 @@ class PerceptionService(threading.Thread):
     def _open_camera(self) -> bool:
         import cv2  # Local import keeps cv2 out of pure unit tests.
 
-        cap = cv2.VideoCapture(self._config.camera_index)
+        cap = cv2.VideoCapture(self._config.ai.camera_index)
         # Capture directly at the model's input resolution to skip one resize.
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._config.camera_width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._config.camera_height)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._config.ai.camera_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._config.ai.camera_height)
         # Buffersize=1 makes read() always return the freshest frame instead
         # of whatever queued up while TTS was speaking.
         try:
@@ -107,7 +107,7 @@ class PerceptionService(threading.Thread):
             logger.info(
                 "[Perception] Camera negotiated: %dx%d @ fourcc=%r (requested %dx%d)",
                 actual_w, actual_h, fourcc,
-                self._config.camera_width, self._config.camera_height,
+                self._config.ai.camera_width, self._config.ai.camera_height,
             )
         except Exception:
             logger.debug("[Perception] Could not read back camera settings.")
@@ -138,13 +138,13 @@ class PerceptionService(threading.Thread):
         # Model load is heavy; do it inside the thread so main() never blocks.
         try:
             self._pipeline = PerceptionPipeline(
-                model_path=self._config.model_path,
-                input_h=self._config.model_input_h,
-                input_w=self._config.model_input_w,
+                model_path=self._config.ai.model_path,
+                input_h=self._config.ai.model_input_h,
+                input_w=self._config.ai.model_input_w,
                 camera_geometry=CameraGeometry(
-                    height_m=self._config.camera_height_m,
-                    tilt_deg=self._config.camera_tilt_deg,
-                    vfov_deg=self._config.camera_vfov_deg,
+                    height_m=self._config.ai.camera_height_m,
+                    tilt_deg=self._config.ai.camera_tilt_deg,
+                    vfov_deg=self._config.ai.camera_vfov_deg,
                 ),
             )
         except Exception:
@@ -161,7 +161,7 @@ class PerceptionService(threading.Thread):
         self.model_ready.set()
         logger.info(
             "[Perception] Pipeline ready — target ~%.1f FPS",
-            self._config.perception_fps,
+            self._config.ai.perception_fps,
         )
 
         try:
@@ -173,14 +173,14 @@ class PerceptionService(threading.Thread):
     # ── Main loop ────────────────────────────────────────────────
 
     def _loop(self) -> None:
-        interval = 1.0 / self._config.perception_fps
+        interval = 1.0 / self._config.ai.perception_fps
         frames_done = 0
         window_start = time.monotonic()
 
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             # Mode gate — skip in WARMUP / SLEEP / SHUTDOWN.
             if self._modes.mode != SystemMode.ACTIVE:
-                self._stop.wait(0.2)
+                self._stop_event.wait(0.2)
                 continue
 
             # Active-utterance gate — wait on the event so we wake the instant
@@ -192,20 +192,20 @@ class PerceptionService(threading.Thread):
             # Post-nav silence: obstacle alerts would be dropped anyway, so
             # skip inference entirely until the window passes.
             if self._voice.in_post_nav_silence():
-                self._stop.wait(0.2)
+                self._stop_event.wait(0.2)
                 continue
 
             t0 = time.monotonic()
             frame = self._read_frame()
             if frame is None:
-                self._stop.wait(0.2)
+                self._stop_event.wait(0.2)
                 continue
 
             try:
                 result = self._pipeline.process(frame)
             except Exception:
                 logger.exception("[Perception] pipeline.process failed")
-                self._stop.wait(0.5)
+                self._stop_event.wait(0.5)
                 continue
 
             self._dispatch(result)
@@ -218,7 +218,7 @@ class PerceptionService(threading.Thread):
                 achieved = frames_done / (now - window_start)
                 logger.info(
                     "[Perception] sustained %.2f FPS (target %.1f)",
-                    achieved, self._config.perception_fps,
+                    achieved, self._config.ai.perception_fps,
                 )
                 if result.total_ms > interval * 1000.0:
                     logger.warning(
@@ -232,7 +232,7 @@ class PerceptionService(threading.Thread):
             elapsed = time.monotonic() - t0
             sleep_time = interval - elapsed
             if sleep_time > 0:
-                self._stop.wait(timeout=sleep_time)
+                self._stop_event.wait(timeout=sleep_time)
 
     # ── Alert dispatch ───────────────────────────────────────────
 
@@ -313,7 +313,7 @@ class PerceptionService(threading.Thread):
         if guidance_text is None or nav_active:
             return None
 
-        cooldown = self._config.path_guidance_cooldown_sec
+        cooldown = self._config.ai.path_guidance_cooldown_sec
         if self._last_path_guidance is None:
             self._last_path_guidance = (guidance_text, now)
             return guidance_text
@@ -355,7 +355,7 @@ class PerceptionService(threading.Thread):
             ["%.2f" % h for h in guidance.histogram],
         )
 
-        cooldown = self._config.vfh_announce_cooldown_sec
+        cooldown = self._config.vfh.announce_cooldown_sec
         if self._last_vfh is not None:
             last_text, last_ts = self._last_vfh
             if guidance.text == last_text and (now - last_ts) < cooldown:
@@ -376,4 +376,4 @@ class PerceptionService(threading.Thread):
         last_text, last_ts = self._last_spoken
         if message != last_text:
             return True
-        return (now - last_ts) >= self._config.obstacle_dedupe_ttl_sec
+        return (now - last_ts) >= self._config.ai.obstacle_dedupe_ttl_sec

@@ -1,5 +1,7 @@
-# gps_filter.py
-# Ham fix listesi alır → outlier atar → ortalama Coord döndürür.
+"""Median-based GPS fix filtering.
+
+Takes a list of raw fixes, rejects outliers, and returns the averaged Coord.
+"""
 
 from typing import List, Optional, Tuple
 
@@ -10,14 +12,13 @@ def filter_fixes(
     fixes: List[Tuple[float, float]],
     max_deviation_m: float = 15.0,
 ) -> Optional[Tuple[float, float]]:
-    """
-    Ham GPS fix listesini filtrele ve tek bir (lat, lon) döndür.
+    """Filter a list of raw GPS fixes and return a single (lat, lon).
 
-    Medyan tabanlı sabit eşik filtresi:
-      1. Fix < 3 → basit ortalama
-      2. Medyan merkez bul
-      3. Merkeze mesafesi > max_deviation_m olanları at
-      4. Kalan fixlerin ortalaması
+    Median-based fixed-threshold filter:
+      1. Fewer than 3 fixes -> simple average.
+      2. Find the median centre.
+      3. Drop fixes farther than max_deviation_m from the centre.
+      4. Average the remaining fixes.
     """
     if not fixes:
         return None

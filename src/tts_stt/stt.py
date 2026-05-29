@@ -1,38 +1,23 @@
-"""
+"""Offline speech-to-text (Vosk) with MLX-based intent classification.
 
-─────────────────────────────────────────────────────────────────
-İLK KURULUM (repo'yu clone'ladıktan sonra bir kez yapılmalı):
-─────────────────────────────────────────────────────────────────
+Runs Vosk Turkish speech recognition and classifies the recognised intent with
+a fine-tuned Qwen SLM (MLX). The Vosk model is downloaded automatically on the
+first run.
 
+First-time setup (run once after cloning the repository):
+    1. Install portaudio (required by PyAudio) on macOS: brew install portaudio
+    2. Install the libraries: pip install vosk pyaudio pyttsx3 mlx mlx-lm huggingface_hub
+    3. Log in to Hugging Face: python -c "from huggingface_hub import login; login()"
+    4. Download the fine-tuned SLM model: python -c "from huggingface_hub import snapshot_download; snapshot_download('Sirius95/ai-glasses-safetensor', local_dir='src/tts_stt/my_custom_slm/')"
+    5. The Vosk Turkish model downloads automatically on first run.
 
-1. macOS'ta portaudio kur (PyAudio için):
-   brew install portaudio
+How to run (from the repository root):
+    python -m tts_stt.stt
 
-2. Gerekli kütüphaneleri kur:
-   pip install vosk pyaudio pyttsx3 mlx mlx-lm huggingface_hub
-
-3. Hugging Face'e login ol:
-   python -c "from huggingface_hub import login; login()"
-
-4. Fine-tune edilmiş SLM modelini indir:
-   python -c "from huggingface_hub import snapshot_download; snapshot_download('Sirius95/ai-glasses-safetensor', local_dir='src/tts_stt/my_custom_slm/')"
-
-5. Vosk Türkçe modeli ilk çalıştırmada OTOMATİK indirilir.
-
-6. Çalıştır:
-   cd src/tts_stt
-   python stt.py
-
-─────────────────────────────────────────────────────────────────
-(Opsiyonel) SLM modelini yeniden eğitmek için:
-─────────────────────────────────────────────────────────────────
-
-   cd src/tts_stt
-   python slmprepare.py
-   python -m mlx_lm lora --model Qwen/Qwen2.5-0.5B-Instruct --data . --train --iters 500 --batch-size 4 --num-layers 8 --learning-rate 1e-4 --seed 42
-   python -m mlx_lm fuse --model Qwen/Qwen2.5-0.5B-Instruct --adapter-path adapters/ --save-path my_custom_slm/
-
-─────────────────────────────────────────────────────────────────
+Optional — re-train the SLM model (from the repository root):
+    python eval/tts_stt/slmprepare.py
+    python -m mlx_lm lora --model Qwen/Qwen2.5-0.5B-Instruct --data outputs/eval/tts_stt --train --iters 500 --batch-size 4 --num-layers 8 --learning-rate 1e-4 --seed 42
+    python -m mlx_lm fuse --model Qwen/Qwen2.5-0.5B-Instruct --adapter-path adapters/ --save-path src/tts_stt/my_custom_slm/
 """
 
 import json
@@ -45,81 +30,86 @@ import zipfile
 import urllib.request
 from pathlib import Path
 from vosk import Model, KaldiRecognizer, SetLogLevel
-from mlx_lm import load, generate  # MLX kütüphaneleri (Apple Silicon)
+from mlx_lm import load, generate  # MLX libraries (Apple Silicon).
 
-# Aynı paketteki tts modülünden import (hem doğrudan hem paket içi çalışır)
+# Import from sibling modules in the same package. The try/except keeps the
+# module runnable both as a package member and as a standalone script.
 try:
-    from tts_stt.tts import handle_intent_response, speak,shutdown_tts,wait_until_done
+    from tts_stt.tts import handle_intent_response, speak, shutdown_tts, wait_until_done
+    from tts_stt.voice_config import VoiceConfig
 except ImportError:
-    from tts import handle_intent_response, speak,shutdown_tts,wait_until_done
+    from tts import handle_intent_response, speak, shutdown_tts, wait_until_done
+    from voice_config import VoiceConfig
 
-# Vosk log seviyesini kıs  (-1 = sessiz)
+# Silence Vosk's own logging (-1 = quiet).
 SetLogLevel(-1)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# VARSAYILAN AYARLAR
+# DEFAULT SETTINGS
 # ──────────────────────────────────────────────────────────────────────────────
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]          # ai-glasses-1/
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]          # Repository root.
 _DEFAULT_MODEL = _PROJECT_ROOT / "vosk-model-small-tr-0.3"
 VOSK_MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-tr-0.3.zip"
 
-SAMPLE_RATE = 16_000
-CHUNK_SIZE = 4096
-CHANNELS = 1
+# Audio capture format — sourced from VoiceConfig for a single source of truth.
+_VOICE_CFG = VoiceConfig()
+SAMPLE_RATE = _VOICE_CFG.sample_rate
+CHUNK_SIZE = _VOICE_CFG.chunk_size
+CHANNELS = _VOICE_CFG.channels
 FORMAT = pyaudio.paInt16
 
 # ──────────────────────────────────────────────────────────────────────────────
-# VOSK MODEL OTOMATİK İNDİRME
+# VOSK MODEL AUTO-DOWNLOAD
 # ──────────────────────────────────────────────────────────────────────────────
 
 def ensure_vosk_model(model_dir: Path) -> Path:
-    """Model yoksa indir ve çıkart, yolunu döndür."""
+    """Download and extract the model if missing; return its path."""
     if model_dir.is_dir():
         return model_dir
 
     zip_path = model_dir.with_suffix(".zip")
-    print(f"Vosk model bulunamadı, indiriliyor: {VOSK_MODEL_URL}")
+    print(f"Vosk model not found, downloading: {VOSK_MODEL_URL}")
     urllib.request.urlretrieve(VOSK_MODEL_URL, str(zip_path))
 
-    print("Zip açılıyor...")
+    print("Extracting zip...")
     with zipfile.ZipFile(zip_path, 'r') as zf:
         zf.extractall(str(model_dir.parent))
 
     zip_path.unlink()
-    print(f"Model hazır: {model_dir}")
+    print(f"Model ready: {model_dir}")
     return model_dir
 
 # ──────────────────────────────────────────────────────────────────────────────
-# MLX TABANLI SLM SINIFLANDIRICI
+# MLX-BASED SLM CLASSIFIER
 # ──────────────────────────────────────────────────────────────────────────────
 
 class MLXIntentClassifier:
-    """Eğittiğimiz Qwen modelini kullanarak niyet analizi yapan sınıf."""
+    """Intent classifier backed by our fine-tuned Qwen model."""
 
     VALID_INTENTS = ["system_command", "navigation", "general"]
 
     def __init__(self, model_path=None):
-        # Eğer dışarıdan bir yol verilmezse, stt.py'nin yanındaki klasörü bul
+        # If no path is given, use the folder next to stt.py.
         if model_path is None:
             current_dir = Path(__file__).resolve().parent
             model_path = str(current_dir / "my_custom_slm")
 
-        print(f"[SLM] Model yükleniyor: {model_path} ...")
+        print(f"[SLM] Loading model: {model_path} ...")
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(
-                f"Model klasörü bulunamadı: {model_path}\n"
-                "Lütfen MLX model eğitiminin (fuse) başarıyla tamamlandığından emin olun."
+                f"Model folder not found: {model_path}\n"
+                "Make sure the MLX model training (fuse) completed successfully."
             )
 
-        # Modeli ve tokenizer'ı yüklüyoruz
+        # Load the model and tokenizer.
         self.model, self.tokenizer = load(model_path)
-        print("[SLM] Model hazır ✓")
+        print("[SLM] Model ready ✓")
 
     def predict(self, text: str):
-        """Verilen metni sınıflandırır. (intent, confidence) döndürür."""
-        # Eğitimde kullandığımız tam prompt şablonu
+        """Classify the given text. Returns (intent, confidence)."""
+        # Exact prompt template used during fine-tuning (kept in Turkish).
         prompt = (
             "<|im_start|>user\n"
             "Aşağıdaki komutun niyetini (intent) sınıflandır. "
@@ -128,21 +118,21 @@ class MLXIntentClassifier:
             "<|im_start|>assistant\n"
         )
 
-        # Modelden cevabı al
+        # Get the model's answer.
         response = generate(
             self.model, self.tokenizer,
             prompt=prompt, max_tokens=10, verbose=False,
         )
 
-        # Qwen'in ek token'larını ve fazlalıkları temizle
+        # Strip Qwen's extra tokens and noise.
         intent = response.strip().lower()
         intent = intent.replace("<|im_end|>", "").strip()
-        # Sadece ilk kelimeyi al (halüsinasyon koruması)
+        # Keep only the first word (hallucination guard).
         intent = intent.split()[0] if intent else "general"
 
-        # Olası bir halüsinasyon durumunda güvenli fallback
+        # Safe fallback in case of a hallucinated intent.
         if intent not in self.VALID_INTENTS:
-            print(f"[SLM] ⚠️  Bilinmeyen intent: '{intent}' → fallback: 'general'")
+            print(f"[SLM] ⚠️  Unknown intent: '{intent}' -> fallback: 'general'")
             return "general", 0.0
 
         return intent, 1.0
@@ -153,21 +143,21 @@ class MLXIntentClassifier:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class STTEngine:
-    """Vosk tabanlı offline ses tanıma motoru."""
+    """Offline speech-recognition engine based on Vosk."""
 
     def __init__(self, model_path: str | None = None):
         """
         Parameters
         ----------
         model_path : str | None
-            Vosk model klasör yolu.
-            Verilmezse proje kökündeki vosk-model-small-tr-0.3 kullanılır.
-            Model bulunamazsa otomatik indirilir.
+            Path to the Vosk model folder. If omitted, the repository-root
+            vosk-model-small-tr-0.3 is used. The model is downloaded
+            automatically if it is missing.
         """
         path = Path(model_path) if model_path else _DEFAULT_MODEL
         path = ensure_vosk_model(path)
 
-        print(f"[STT] Model yükleniyor: {path}")
+        print(f"[STT] Loading model: {path}")
         self.model = Model(str(path))
         self.recognizer = KaldiRecognizer(self.model, SAMPLE_RATE)
         self.recognizer.SetWords(True)
@@ -175,12 +165,12 @@ class STTEngine:
         self._audio = pyaudio.PyAudio()
         self._running = False
 
-        # MLX tabanlı intent sınıflandırıcı
+        # MLX-based intent classifier.
         self._slm = MLXIntentClassifier()
-        print("[STT] Hazır ✓")
+        print("[STT] Ready ✓")
 
     # ──────────────────────────────────────────────────────────────────────
-    # TEK SEFERLİK DİNLEME
+    # SINGLE-SHOT LISTENING
     # ──────────────────────────────────────────────────────────────────────
 
     def listen(self, timeout_sec: float = 5.0, silence_sec: float = 1.5) -> str:
@@ -192,7 +182,7 @@ class STTEngine:
             frames_per_buffer=CHUNK_SIZE,
         )
 
-        print("[STT] Dinleniyor...")
+        print("[STT] Listening...")
         recognizer = KaldiRecognizer(self.model, SAMPLE_RATE)
 
         start = time.time()
@@ -219,12 +209,12 @@ class STTEngine:
         if result_text:
             print(f'[STT] "{result_text}"')
         else:
-            print("[STT] Ses algılanamadı.")
+            print("[STT] No speech detected.")
 
         return result_text
 
     # ──────────────────────────────────────────────────────────────────────
-    # SÜREKLİ DİNLEME (arka plan thread)
+    # CONTINUOUS LISTENING (background thread)
     # ──────────────────────────────────────────────────────────────────────
 
     def listen_continuous(self, callback):
@@ -239,7 +229,7 @@ class STTEngine:
         )
 
         recognizer = KaldiRecognizer(self.model, SAMPLE_RATE)
-        print("[STT] Sürekli dinleme başladı. Konuşabilirsiniz...")
+        print("[STT] Continuous listening started. You may speak...")
 
         try:
             while self._running:
@@ -252,13 +242,13 @@ class STTEngine:
                     if not text:
                         continue
 
-                    # Vosk'tan gelen sesi metne çevirdik, şimdi modele soruyoruz
+                    # Vosk turned speech into text; now query the model.
                     intent, conf = self._slm.predict(text)
-                    print(f'\n[SİSTEM] Duyulan: "{text}" → Algılanan Niyet: [{intent}] (güven: {conf})')
+                    print(f'\n[SYSTEM] Heard: "{text}" -> Detected intent: [{intent}] (confidence: {conf})')
 
                     if intent == "system_command":
-                        print("[SİSTEM] Kapatma komutu algılandı.")
-                        # Kullanıcıya sesli geri bildirim ver, sonra kapat
+                        print("[SYSTEM] Shutdown command detected.")
+                        # Give the user audio feedback, then shut down.
                         callback(text, intent, conf)
                         self._running = False
                         break
@@ -268,7 +258,7 @@ class STTEngine:
         finally:
             stream.stop_stream()
             stream.close()
-            print("[STT] Dinleme durduruldu.")
+            print("[STT] Listening stopped.")
 
     def stop(self):
         self._running = False
@@ -277,55 +267,55 @@ class STTEngine:
         self._running = False
         shutdown_tts()
         self._audio.terminate()
-        print("[STT] Kapatıldı.")
+        print("[STT] Shut down.")
         
 
 
 def my_callback(text, intent, conf):
+    """Runs whenever a sentence is recognised.
+
+    Order of operations: intent detection -> audio response -> hardware trigger.
     """
-    Bu fonksiyon her cümle tanındığında çalışır.
-    İşlem sırası: Niyet Algılama -> Sesli Yanıt -> Donanım Tetikleme
-    """
-    # 1. TEMİZLİK: Gözlük kendi sesini duyduğunda (STT hatası olarak)
-    # niyet 'general' çıkabiliyor. Eğer metin asistanın kendi kalıplarını
-    # içeriyorsa işlemi atla.
+    # 1. CLEANUP: when the glasses hear their own voice (as an STT error) the
+    # intent may come out as 'general'. If the text contains the assistant's
+    # own phrases, skip processing. (Patterns are the assistant's own Turkish
+    # TTS output, so they must stay in Turkish.)
     tts_echo_patterns = ["anlaşıldı", "hesaplanıyor", "rota", "yönlendirme"]
     if any(pattern in text.lower() for pattern in tts_echo_patterns):
         return
 
-    print(f"\n[İŞLEM] Kullanıcı ne dedi: '{text}'")
-    print(f"[İŞLEM] Tespit edilen niyet: {intent.upper()} (güven: {conf})")
+    print(f"\n[ACTION] What the user said: '{text}'")
+    print(f"[ACTION] Detected intent: {intent.upper()} (confidence: {conf})")
 
-    # 2. SESLİ GERİ BİLDİRİM (TTS)
-    # handle_intent_response fonksiyonu ses bitene kadar beklediği için
-    # eko (echo) sorunu burada doğal yolla çözülür.
+    # 2. AUDIO FEEDBACK (TTS). handle_intent_response blocks until speech ends,
+    # so the echo problem is naturally resolved here.
     handle_intent_response(intent, text)
 
-    # 3. DONANIM VE MANTIK TETİKLEME
+    # 3. HARDWARE AND LOGIC TRIGGERS.
     if intent == "navigation":
-        print("[SİSTEM] Navigasyon motoru ateşleniyor...")
-        # Örnek entegrasyon (Kendi objene göre güncelle):
+        print("[SYSTEM] Firing up the navigation engine...")
+        # Example integration (adapt to your own objects):
         # success, msg, _ = nav.navigate_to_nearest(current_coord, text)
         # speak(msg)
 
     elif intent == "system_command":
-        print("[SİSTEM] Kritik sistem komutu uygulandı.")
-        # Buraya ek temizlik işlemleri gelebilir (logları kaydetmek gibi)
+        print("[SYSTEM] Critical system command applied.")
+        # Additional cleanup could go here (e.g. saving logs).
 
 
 if __name__ == "__main__":
-    # STT motorunu başlat
+    # Start the STT engine.
     stt = STTEngine()
 
-    print("\n=== ALAS Akıllı Gözlük Sistemi Aktif ===")
-    print("Dinleme yapılıyor... Durdurmak için 'kapat' deyin.\n")
+    print("\n=== ALAS Smart Glasses System Active ===")
+    print("Listening... Say 'kapat' to stop.\n")
     speak("Merhaba, Bugün nereye gitmek istersin?")
     wait_until_done()
 
     try:
-        # Sürekli dinlemeyi bizim yeni callback fonksiyonumuzla başlatıyoruz
+        # Start continuous listening with our callback.
         stt.listen_continuous(callback=my_callback)
     except KeyboardInterrupt:
-        print("\nSistem kullanıcı tarafından kapatıldı.")
+        print("\nSystem stopped by the user.")
     finally:
         stt.close()

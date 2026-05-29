@@ -78,7 +78,7 @@ class VoicePolicy:
         """Blocking nav instruction. Sets active gate AND post-utterance window."""
         self._priority_speak(text)
         with self._lock:
-            self._suppress_obstacles_until = time.monotonic() + self._cfg.post_nav_silence_sec
+            self._suppress_obstacles_until = time.monotonic() + self._cfg.voice.post_nav_silence_sec
 
     def say_progress(self, text: str) -> None:
         """Non-blocking distance announcement. No gates. No silence window."""

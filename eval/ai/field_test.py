@@ -1,19 +1,17 @@
-# =============================================================================
-# ALAS — Headless Field Test
-# =============================================================================
-# No display, no lag. Logs everything to CSV, saves every Nth frame as JPEG.
-# Run outdoors, review logs at home.
-#
-# Usage:
-#   python src/ai/field_test.py --model models/segmentation/alas_engine.trt --gstreamer
-#   python src/ai/field_test.py --model models/segmentation/alas_engine.trt --gstreamer --duration 300
-#   python src/ai/field_test.py --model models/segmentation/alas_model.onnx --duration 120
-#
-# Output:  field_test_<timestamp>/
-#          ├── log.csv              (every frame: fps, inference_ms, alerts, class %)
-#          ├── summary.txt          (session stats)
-#          └── frames/              (every 10th frame as JPEG — overlay + raw)
-# =============================================================================
+"""ALAS — headless field test.
+
+No display, no lag. Logs everything to CSV and saves every Nth frame as JPEG.
+Run outdoors, then review the logs at home.
+
+Outputs (under outputs/eval/ai/field_tests/<timestamp>/):
+    log.csv     every frame: fps, inference_ms, alerts, class percentages
+    frames/     every Nth frame as JPEG (overlay + raw)
+
+How to run (from the repository root):
+    python eval/ai/field_test.py --model models/segmentation/alas_engine.trt --gstreamer
+    python eval/ai/field_test.py --model models/segmentation/alas_engine.trt --gstreamer --duration 300
+    python eval/ai/field_test.py --model models/segmentation/alas_model.onnx --duration 120
+"""
 
 import os
 import csv
@@ -23,6 +21,10 @@ import ctypes
 import logging
 from pathlib import Path
 from enum import IntEnum
+
+# Resolve the repository root so outputs land in a fixed location regardless of
+# the current working directory.
+_REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "src").is_dir())
 
 import cv2
 import numpy as np
@@ -326,7 +328,7 @@ def run(model_path, cam_id=0, target_fps=8.0, duration=0, gst=False,
 
     # Output dir
     ts = time.strftime("%Y%m%d_%H%M%S")
-    out = Path("outputs/field_tests/{}".format(ts))
+    out = _REPO_ROOT / "outputs" / "eval" / "ai" / "field_tests" / ts
     fdir = out / "frames"
     fdir.mkdir(parents=True, exist_ok=True)
 

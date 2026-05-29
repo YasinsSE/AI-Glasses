@@ -1,28 +1,20 @@
-"""Path-guidance integration test — runs in two modes.
+"""Path-guidance integration eval — runs in two modes.
 
 Image mode (no model required):
-    Replays a previously saved color overlay (result_*_overlay.jpg) by
-    converting per-pixel colors back to class IDs and feeding the mask
-    into generate_path_guidance().
-
-        python tests/ai_test/test_guidance_from_overlay.py \
-            outputs/segmentation_samples/result_test1_overlay.jpg
-        python tests/ai_test/test_guidance_from_overlay.py \
-            outputs/segmentation_samples/result_test1_overlay.jpg --nav
-
-    --nav simulates an active navigation session, so crosswalks are
-    announced (matches PerceptionService's runtime gating).
+    Replays a previously saved colour overlay (result_*_overlay.jpg) by
+    converting per-pixel colours back to class IDs and feeding the mask into
+    generate_path_guidance(). The --nav flag simulates an active navigation
+    session, so crosswalks are announced (matches PerceptionService gating).
 
 Camera mode (PerceptionPipeline):
-    Requires a real segmentation engine (.onnx or .trt/.engine). Runs
-    live inference on the camera feed and prints/draws guidance.
+    Requires a real segmentation engine (.onnx or .trt/.engine). Runs live
+    inference on the camera feed and prints/draws guidance. Press 'q' to quit.
 
-        python tests/ai_test/test_guidance_from_overlay.py --camera \
-            --model models/segmentation/alas_engine.onnx
-        python tests/ai_test/test_guidance_from_overlay.py --camera \
-            --model models/segmentation/alas_engine.onnx --camera-index 1
-
-    Press 'q' to quit.
+How to run (from the repository root):
+    python eval/ai/guidance_from_overlay_eval.py outputs/eval/ai/segmentation_samples/result_test1_overlay.jpg
+    python eval/ai/guidance_from_overlay_eval.py outputs/eval/ai/segmentation_samples/result_test1_overlay.jpg --nav
+    python eval/ai/guidance_from_overlay_eval.py --camera --model models/segmentation/alas_engine.onnx
+    python eval/ai/guidance_from_overlay_eval.py --camera --model models/segmentation/alas_engine.onnx --camera-index 1
 """
 
 import argparse
@@ -75,28 +67,27 @@ CLASS_COLORS_BGR = {
 MIN_ALERT_RATIO      = 0.02
 VERY_CLOSE_RATIO     = 0.15
 NEARBY_RATIO         = 0.05
-PATH_BOTTOM_FRACTION      = 0.5   # maskenin alt yarısına bak
-CORRIDOR_MARGIN           = 0.15  # sol/sağ kenarı yoksay — kullanıcı oraya yürümez
+PATH_BOTTOM_FRACTION      = 0.5   # Look at the bottom half of the mask.
+CORRIDOR_MARGIN           = 0.15  # Ignore left/right edges — the user will not walk there.
 MIN_WALKABLE_FOR_GUIDANCE = 0.08
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  FOTOĞRAF MODU — yardımcı fonksiyonlar
-#  (Kamera modu bu fonksiyonları kullanmaz; PerceptionPipeline'a güvenir.)
+#  IMAGE MODE — helper functions
+#  (Camera mode does not use these; it relies on PerceptionPipeline.)
 # ════════════════════════════════════════════════════════════════════════════
 
 def load_image_as_rgb(path: str) -> np.ndarray:
-    """Overlay görselini RGB numpy dizisine yükler."""
+    """Load the overlay image into an RGB numpy array."""
     from PIL import Image
     return np.array(Image.open(path).convert("RGB"))
 
 
 def rgb_to_mask(rgb: np.ndarray) -> np.ndarray:
-    """
-    Overlay renklerini class ID'lerine dönüştürür.
-    Renkler perception.py'deki CLASS_COLORS_BGR ile eşleşir.
+    """Convert overlay colours into class IDs.
 
-    Sıra önemli: daha özgün kurallar önce uygulanır.
+    Colours match CLASS_COLORS_BGR in perception.py. Order matters: more
+    specific rules are applied first.
     """
     h, w = rgb.shape[:2]
     mask = np.zeros((h, w), dtype=np.uint8)
@@ -109,22 +100,22 @@ def rgb_to_mask(rgb: np.ndarray) -> np.ndarray:
     sat = (mx - np.minimum(np.minimum(r, g), b)) / (mx + 1e-6)
     colourful = sat > 0.15
 
-    # Parlak yeşil: G baskın, R ve B düşük
+    # Bright green: G dominant, R and B low.
     is_green     = colourful & (g > r * 1.4) & (g > b * 1.4) & (g > 100)
-    # Cyan: G ve B yüksek, R düşük
+    # Cyan: G and B high, R low.
     is_cyan      = colourful & (g > r * 1.3) & (b > r * 1.3) & (g > 80) & (b > 80)
-    # Koyu lacivert: B baskın
+    # Dark navy: B dominant.
     is_navy      = colourful & (b > r * 1.5) & (b > g * 1.5)
-    # Turuncu: R yüksek, G orta, B düşük
+    # Orange: R high, G mid, B low.
     is_orange    = colourful & (r > 150) & (g > 60) & (g < r * 0.75) & (b < 60)
-    # Koyu turuncu / kahverengi-turuncu (fall hazard)
+    # Dark orange / brownish-orange (fall hazard).
     is_dk_orange = colourful & (r > 100) & (r < 200) & (g > 40) & (g < r * 0.65) & (b < 40)
-    # Pembe: R baskın, G ve B birbirine yakın ve düşük değil
+    # Pink: R dominant, G and B close to each other and not low.
     is_pink      = colourful & (r > g * 1.2) & (r > b * 1.2) & (g > 80) & (b > 80) & (np.abs(g - b) < 40)
-    # Kırmızı: R baskın, G ve B düşük
+    # Red: R dominant, G and B low.
     is_red       = colourful & (r > g * 1.5) & (r > b * 1.5) & (r > 120) & (g < 80)
 
-    # En özgün önce (çakışma engellemek için)
+    # Most specific first (to avoid overlaps).
     mask[is_navy]      = VEHICLE_ROAD
     mask[is_cyan]      = CROSSWALK
     mask[is_green]     = WALKABLE_SURFACE
@@ -137,13 +128,13 @@ def rgb_to_mask(rgb: np.ndarray) -> np.ndarray:
 
 
 def analyse_and_alert(mask: np.ndarray, nav_active: bool = False):
-    """Maske üzerinden alert listesi üretir (fotoğraf modu için)."""
+    """Produce the alert list from a mask (for image mode)."""
     h, w   = mask.shape
     third  = w // 3
     total  = float(h * w)
     alerts = []
 
-    print("── Piksel dağılımı ──────────────────────────────────")
+    print("── Pixel distribution ───────────────────────────────")
     for cid in range(7):
         px = float(np.sum(mask == cid))
         if px == 0:
@@ -177,16 +168,16 @@ def analyse_and_alert(mask: np.ndarray, nav_active: bool = False):
 
 
 def generate_path_guidance(mask: np.ndarray):
-    """
-    Alt yarıdaki merkezi koridoru analiz ederek yürüme yönü üretir.
-    Sol/sağ kenar pikselleri (CORRIDOR_MARGIN) yoksayılır — kullanıcı
-    ekranın tam kenarına yürümeyeceği için o pikseller yönü yanıltır.
+    """Produce a walking direction from the central corridor in the bottom half.
+
+    Left/right edge pixels (CORRIDOR_MARGIN) are ignored — the user will not
+    walk into the screen edge, so those pixels would skew the direction.
     """
     h, w = mask.shape
     bottom_start = int(h * (1.0 - PATH_BOTTOM_FRACTION))
     bottom = mask[bottom_start:, :]
 
-    # Merkezi koridor: kenar piksellerini çıkar
+    # Central corridor: drop the edge pixels.
     c_left  = int(w * CORRIDOR_MARGIN)
     c_right = int(w * (1.0 - CORRIDOR_MARGIN))
     corridor   = bottom[:, c_left:c_right]
@@ -202,7 +193,7 @@ def generate_path_guidance(mask: np.ndarray):
     if walkable_ratio < MIN_WALKABLE_FOR_GUIDANCE:
         return "Yürünebilir alan çok azalıyor, dikkatli ilerleyin"
 
-    # Koridoru 3 dilime böl: sol / orta / sağ
+    # Split the corridor into 3 slices: left / centre / right.
     third = corridor_w // 3
     left_ratio   = float(np.sum(walkable[:, :third]))          / float(walkable[:, :third].size)
     center_ratio = float(np.sum(walkable[:, third: 2 * third])) / float(walkable[:, third: 2 * third].size)
@@ -224,7 +215,7 @@ def generate_path_guidance(mask: np.ndarray):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  FOTOĞRAF MODU — ana akış
+#  IMAGE MODE — main flow
 # ════════════════════════════════════════════════════════════════════════════
 
 def run_photo_mode(image_path: str, nav_active: bool) -> None:
@@ -239,7 +230,7 @@ def run_photo_mode(image_path: str, nav_active: bool) -> None:
     mask   = rgb_to_mask(rgb)
     alerts = analyse_and_alert(mask, nav_active=nav_active)
 
-    # Yaya geçidini navigasyon aktif değilse filtrele
+    # Filter out crosswalks when navigation is not active.
     filtered = [a for a in alerts if not ("geçidi" in a and not nav_active)]
     top_hazard = filtered[0] if filtered else None
     guidance   = generate_path_guidance(mask)
@@ -251,41 +242,43 @@ def run_photo_mode(image_path: str, nav_active: bool) -> None:
     elif top_hazard:
         print(f"  🗣  {top_hazard}")
     else:
-        print("  (yürünebilir alan algılanamadı)")
+        print("  (no walkable area detected)")
 
     if not nav_active and any("geçidi" in a for a in alerts):
-        print("  ℹ  (yaya geçidi algılandı ama navigasyon aktif değil, sessiz geçildi)")
+        print("  ℹ  (crosswalk detected but navigation inactive, skipped silently)")
     print()
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  KAMERA MODU — gerçek PerceptionPipeline ile canlı kamera
+#  CAMERA MODE — live camera with the real PerceptionPipeline
 # ════════════════════════════════════════════════════════════════════════════
 
 def run_camera_mode(model_path: str, camera_index: int) -> None:
-    """
-    Ham kamera frame'lerini PerceptionPipeline'a verir.
-    Maske overlay'i OpenCV penceresinde gösterir, yön kılavuzunu
-    hem ekrana hem terminale yazar. 'q' tuşu ile çıkış.
+    """Feed raw camera frames into PerceptionPipeline.
+
+    Shows the mask overlay in an OpenCV window and writes the guidance both on
+    screen and to the terminal. Press 'q' to quit.
     """
     import cv2
+    from pathlib import Path
 
-    # src/ klasörünü Python path'ine ekle (perception modüllerini bulmak için)
-    src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+    # Add src/ to the Python path so the perception modules are importable.
+    repo_root = next(p for p in Path(__file__).resolve().parents if (p / "src").is_dir())
+    src_dir = str(repo_root / "src")
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
 
     from ai.perception import PerceptionPipeline, render_overlay
 
-    print(f"[Kamera] Model yükleniyor: {model_path}")
+    print(f"[Camera] Loading model: {model_path}")
     pipeline = PerceptionPipeline(model_path=model_path)
 
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
-        print(f"HATA: Kamera {camera_index} açılamadı.")
+        print(f"ERROR: could not open camera {camera_index}.")
         sys.exit(1)
 
-    print(f"[Kamera] Kamera {camera_index} açıldı. Çıkmak için 'q' basın.\n")
+    print(f"[Camera] Camera {camera_index} opened. Press 'q' to quit.\n")
 
     while True:
         ok, frame = cap.read()
@@ -296,7 +289,7 @@ def run_camera_mode(model_path: str, camera_index: int) -> None:
 
         result = pipeline.process(frame)
 
-        # ── Terminal çıktısı ────────────────────────────────────
+        # ── Terminal output ─────────────────────────────────────
         guidance = result.path_guidance
         alerts   = result.alerts
         top_hazard = alerts[0] if alerts else None
@@ -311,10 +304,10 @@ def run_camera_mode(model_path: str, camera_index: int) -> None:
         print(f"[{time.strftime('%H:%M:%S')}] {msg}  "
               f"(inf: {result.inference_ms:.0f}ms | walkable: {result.scene.walkable_ratio:.0%})")
 
-        # ── Overlay görselleştirme ──────────────────────────────
+        # ── Overlay visualisation ───────────────────────────────
         overlay = render_overlay(frame, result.mask)
 
-        # Yön metnini frame üzerine yaz
+        # Draw the guidance text onto the frame.
         cv2.putText(
             overlay, msg,
             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA,
@@ -335,35 +328,35 @@ def run_camera_mode(model_path: str, camera_index: int) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  ARGÜMAN ÇÖZÜMLEYICI & GİRİŞ NOKTASI
+#  ARGUMENT PARSER & ENTRY POINT
 # ════════════════════════════════════════════════════════════════════════════
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="ALAS path guidance testi — fotoğraf veya canlı kamera",
+        description="ALAS path-guidance eval — image or live camera",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Örnekler:\n"
-            "  Fotoğraf : venv/bin/python test_guidance_from_overlay.py overlay.png\n"
-            "  Fotoğraf+nav: venv/bin/python test_guidance_from_overlay.py overlay.png --nav\n"
-            "  Kamera   : venv/bin/python test_guidance_from_overlay.py --camera --model model.onnx\n"
+            "Examples (run from the repository root):\n"
+            "  Image     : python eval/ai/guidance_from_overlay_eval.py overlay.png\n"
+            "  Image+nav : python eval/ai/guidance_from_overlay_eval.py overlay.png --nav\n"
+            "  Camera    : python eval/ai/guidance_from_overlay_eval.py --camera --model model.onnx\n"
         ),
     )
 
-    # Fotoğraf modu
+    # Image mode.
     p.add_argument(
         "image", nargs="?", default=None,
-        help="Overlay görsel yolu (fotoğraf modu)",
+        help="Overlay image path (image mode)",
     )
     p.add_argument(
         "--nav", action="store_true",
-        help="Navigasyon aktif simülasyonu (yaya geçidi sesli bildirim açılır)",
+        help="Simulate active navigation (enables crosswalk voice alerts)",
     )
 
-    # Kamera modu
+    # Camera mode.
     p.add_argument(
         "--camera", action="store_true",
-        help="Canlı kamera modunu etkinleştir",
+        help="Enable live camera mode",
     )
     p.add_argument(
         "--model", default="models/segmentation/alas_engine.trt",
@@ -381,13 +374,13 @@ def main() -> None:
     args = build_parser().parse_args()
 
     if args.camera:
-        # ── KAMERA MODU ──────────────────────────────────────────
+        # ── CAMERA MODE ──────────────────────────────────────────
         run_camera_mode(
             model_path=args.model,
             camera_index=args.camera_index,
         )
     elif args.image:
-        # ── FOTOĞRAF MODU ────────────────────────────────────────
+        # ── IMAGE MODE ───────────────────────────────────────────
         run_photo_mode(
             image_path=args.image,
             nav_active=args.nav,

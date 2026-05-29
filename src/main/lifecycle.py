@@ -117,14 +117,22 @@ def wait_for_shutdown(
             if not services:
                 continue
             for service in services:
-                if service is None or service.name in announced:
+                if service is None:
                     continue
-                if not service.is_alive():
-                    announced.add(service.name)
-                    logger.error("[Lifecycle] %s died — forcing shutdown.", service.name)
+                # Duck-typed so any service shape is safe: a service is
+                # watchdogged only if it exposes a callable ``is_alive``.
+                name = getattr(service, "name", None) or type(service).__name__
+                if name in announced:
+                    continue
+                is_alive = getattr(service, "is_alive", None)
+                if not callable(is_alive):
+                    continue  # Not thread-like — nothing to watchdog.
+                if not is_alive():
+                    announced.add(name)
+                    logger.error("[Lifecycle] %s died — forcing shutdown.", name)
                     if voice is not None:
                         try:
-                            voice.emergency(f"{service.name} durdu, sistem kapanıyor.")
+                            voice.emergency(f"{name} durdu, sistem kapanıyor.")
                         except Exception:
                             logger.exception("[Lifecycle] watchdog announce failed")
                     stop_event.set()

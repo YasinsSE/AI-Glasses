@@ -1,1 +1,1 @@
-# ai paket tanimlamasi
+# ai package — perception pipeline, preprocessing, geometry, and config.

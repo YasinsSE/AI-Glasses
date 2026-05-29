@@ -14,14 +14,18 @@ clear sidewalk. The dispatcher is expected to check it before calling plan().
 """
 
 import logging
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 import numpy as np
 
 from ai.geometry import CameraGeometry, pixel_to_ground_distance
 from ai.perception import ClassID, SceneAnalysis
-from main.config import ALASConfig
 from navigation.local_planner.models import VFHAction, VFHGuidance
+
+if TYPE_CHECKING:
+    # Imported for type hints only; a runtime import would create a cycle
+    # (main.config composes VFHConfig from this package).
+    from main.config import ALASConfig
 
 logger = logging.getLogger("ALAS.vfh")
 
@@ -55,25 +59,25 @@ _ACTIVATION_HAZARD_CLASSES = {
 class VFHPlanner:
     """Stateless-ish (only smoothing state) image-space VFH planner."""
 
-    def __init__(self, config: ALASConfig, camera_geometry: Optional[CameraGeometry] = None) -> None:
+    def __init__(self, config: "ALASConfig", camera_geometry: Optional[CameraGeometry] = None) -> None:
         self._cfg = config
         self._geom = camera_geometry or CameraGeometry(
-            height_m=config.camera_height_m,
-            tilt_deg=config.camera_tilt_deg,
-            vfov_deg=config.camera_vfov_deg,
+            height_m=config.ai.camera_height_m,
+            tilt_deg=config.ai.camera_tilt_deg,
+            vfov_deg=config.ai.camera_vfov_deg,
         )
-        self._image_h = config.model_input_h
-        self._image_w = config.model_input_w
+        self._image_h = config.ai.model_input_h
+        self._image_w = config.ai.model_input_w
 
         # Pre-compute the bottom-near region rows and the per-row distance
         # weight. These depend only on geometry + config, not on the frame.
-        self._near_h = max(1, int(self._image_h * config.vfh_near_rows_ratio))
+        self._near_h = max(1, int(self._image_h * config.vfh.near_rows_ratio))
         self._near_start = self._image_h - self._near_h
         self._row_weights = self._compute_row_weights()
 
         # Pre-compute column → sector mapping.
         self._sector_for_col = self._compute_sector_for_col()
-        self._centre_sector = config.vfh_num_sectors // 2
+        self._centre_sector = config.vfh.num_sectors // 2
 
         # Lookup-table form of _CLASS_COSTS for vectorised mapping.
         max_cid = max(_CLASS_COSTS.keys()) + 1
@@ -99,15 +103,15 @@ class VFHPlanner:
              blocker still warrants a plan even if its dominant zone is left/right.
           5. A vehicle is in the centre and closer than ``vfh_activation_distance_m``.
         """
-        if not self._cfg.vfh_enabled:
+        if not self._cfg.vfh.enabled:
             return False
-        if scene.walkable_ratio < self._cfg.vfh_low_walkable_ratio:
+        if scene.walkable_ratio < self._cfg.vfh.low_walkable_ratio:
             return True
         big_threshold = 0.15
         for zone in scene.zones:
             if zone.class_id not in _ACTIVATION_HAZARD_CLASSES:
                 continue
-            if zone.pixel_ratio < self._cfg.vfh_activation_ratio:
+            if zone.pixel_ratio < self._cfg.vfh.activation_ratio:
                 continue
             centre_share = float(zone.zone_ratios.get("center", 0.0))
             if zone.dominant_zone == "center":
@@ -119,7 +123,7 @@ class VFHPlanner:
             if (
                 zone.class_id == int(ClassID.VEHICLE)
                 and zone.estimated_distance_m is not None
-                and zone.estimated_distance_m < self._cfg.vfh_activation_distance_m
+                and zone.estimated_distance_m < self._cfg.vfh.activation_distance_m
             ):
                 return True
         return False
@@ -139,7 +143,7 @@ class VFHPlanner:
         sector = self._select_sector(hist, target_action)
         action = self._sector_to_action(sector)
         text = self._action_to_text(action)
-        centre_blocked = bool(hist[self._centre_sector] > self._cfg.vfh_blocked_threshold)
+        centre_blocked = bool(hist[self._centre_sector] > self._cfg.vfh.blocked_threshold)
 
         return VFHGuidance(
             action=action,
@@ -165,7 +169,7 @@ class VFHPlanner:
 
     def _compute_row_weights(self) -> np.ndarray:
         """One weight per cost-grid row (closer → larger)."""
-        rows = self._cfg.vfh_grid_rows
+        rows = self._cfg.vfh.grid_rows
         weights = np.zeros(rows, dtype=np.float32)
         for r in range(rows):
             # Centre pixel-y of this grid row in mask coordinates.
@@ -182,8 +186,8 @@ class VFHPlanner:
         return weights
 
     def _compute_sector_for_col(self) -> np.ndarray:
-        cols = self._cfg.vfh_grid_cols
-        sectors = self._cfg.vfh_num_sectors
+        cols = self._cfg.vfh.grid_cols
+        sectors = self._cfg.vfh.num_sectors
         idx = np.arange(cols, dtype=np.int32)
         return (idx * sectors // cols).astype(np.int32)
 
@@ -193,13 +197,13 @@ class VFHPlanner:
         Each grid cell takes the most-frequent class in its (row_block × col_block)
         of the near-field mask, then maps it through ``_cost_lut``.
         """
-        rows = self._cfg.vfh_grid_rows
-        cols = self._cfg.vfh_grid_cols
+        rows = self._cfg.vfh.grid_rows
+        cols = self._cfg.vfh.grid_cols
         h, w = mask.shape
 
         # If mask shape disagrees with config (e.g. demo with a raw PNG of
         # different size) operate on the actual shape.
-        near_h = max(1, int(h * self._cfg.vfh_near_rows_ratio))
+        near_h = max(1, int(h * self._cfg.vfh.near_rows_ratio))
         near = mask[h - near_h:, :]
         # Resize the near-field mask down to (rows × cols) using INTER_NEAREST
         # so class IDs are preserved (no interpolation across class boundaries).
@@ -213,7 +217,7 @@ class VFHPlanner:
 
     def _build_histogram(self, cost_grid: np.ndarray) -> np.ndarray:
         """Per-sector aggregated cost, distance-weighted across rows."""
-        sectors = self._cfg.vfh_num_sectors
+        sectors = self._cfg.vfh.num_sectors
         # Row-weight each cell first → shape (rows, cols).
         weighted = cost_grid * self._row_weights[:, None]
         hist = np.zeros(sectors, dtype=np.float32)
@@ -242,7 +246,7 @@ class VFHPlanner:
           - "turn_right" → toward the right-most sectors
           - anything else (None, "continue", "start", "finish") → centre
         """
-        threshold = self._cfg.vfh_blocked_threshold
+        threshold = self._cfg.vfh.blocked_threshold
         open_mask = hist < threshold
         if not open_mask.any():
             return None
@@ -250,7 +254,7 @@ class VFHPlanner:
         if target_action == "turn_left":
             target = 0
         elif target_action == "turn_right":
-            target = self._cfg.vfh_num_sectors - 1
+            target = self._cfg.vfh.num_sectors - 1
         else:
             target = self._centre_sector
 

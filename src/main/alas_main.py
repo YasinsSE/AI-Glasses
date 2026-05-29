@@ -38,7 +38,7 @@ from main.logging_config import configure_logging
 from ai.perception_service import PerceptionService
 from navigation.local_planner import VFHPlanner
 from navigation.navigation_service import NavigationService
-from navigation.router import NavigationSystem, NavConfig
+from navigation.router import NavigationSystem
 from navigation.sensors import build_gps
 from tts_stt import load_stt
 from tts_stt.button_listener import ButtonListener
@@ -61,14 +61,14 @@ def main():
     gps = build_gps(config)
 
     # 4. Navigation core — pure domain object, no threads of its own.
-    nav = NavigationSystem(config.osm_map_path, NavConfig(log_dir=config.log_dir))
+    nav = NavigationSystem(config.osm_map_path, config.nav)
 
     # 5. Speech recognition engine — loaded on a background thread so the
     #    boot announcement (and nav warmup) are not blocked by Vosk model load.
     # VFH local planner — image-space escape routing over the segmentation
     # mask. None disables the override and PerceptionService falls back to
     # plain path_guidance.
-    vfh = VFHPlanner(config) if config.vfh_enabled else None
+    vfh = VFHPlanner(config) if config.vfh.enabled else None
 
     perception = (
         None if config.no_camera

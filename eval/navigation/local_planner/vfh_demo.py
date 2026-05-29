@@ -1,35 +1,30 @@
-# =============================================================================
-# ALAS — VFH Local Planner Demo
-# =============================================================================
-# Standalone demonstration of the VFH local planner on image, video, or live
-# camera input. Mirrors the structure of ai/test_seg_inference.py and
-# ai/image_test_seg_inference.py so it slots into the same testing workflow.
-#
-# Modes:
-#   1) Image  : run PerceptionPipeline + VFH on a single JPG/PNG
-#      python -m navigation.local_planner.vfh_demo \
-#          --model models/segmentation/alas_engine.trt --image test.jpg --save
-#
-#   2) Video  : same, frame-by-frame on a video file
-#      python -m navigation.local_planner.vfh_demo \
-#          --model models/segmentation/alas_engine.trt --video walk.mp4
-#
-#   3) Camera : live camera (test_seg_inference.py parity)
-#      python -m navigation.local_planner.vfh_demo \
-#          --model models/segmentation/alas_engine.trt --camera 0
-#
-#   4) No-model: skip the segmentation pipeline and feed a pre-computed class
-#      mask PNG straight into VFH (fastest iteration loop)
-#      python -m navigation.local_planner.vfh_demo --no-model --mask-image mask.png
-#
-# In every mode the demo prints the chosen VFHAction + Turkish TTS text to
-# stdout and (unless --headless) opens a window with the composite overlay.
-# Press 'q' to quit, 's' to save a snapshot to outputs/vfh_demo_<ts>.png.
-# =============================================================================
+"""ALAS — VFH local planner demo.
+
+Standalone demonstration of the VFH local planner on image, video, or live
+camera input. Mirrors the structure of the AI segmentation eval scripts so it
+slots into the same evaluation workflow.
+
+Modes:
+    1) Image    — run PerceptionPipeline + VFH on a single JPG/PNG.
+    2) Video    — the same, frame-by-frame on a video file.
+    3) Camera   — live camera input.
+    4) No-model — skip segmentation and feed a pre-computed class-ID mask PNG
+                  straight into VFH (fastest iteration loop).
+
+In every mode the demo prints the chosen VFHAction + Turkish TTS text to stdout
+and (unless --headless) opens a window with the composite overlay. Press 'q' to
+quit, 's' to save a snapshot. Snapshots are written under
+outputs/eval/navigation/local_planner/.
+
+How to run (from the repository root):
+    python eval/navigation/local_planner/vfh_demo.py --model models/segmentation/alas_engine.trt --image eval/ai/samples/test1.jpeg --save
+    python eval/navigation/local_planner/vfh_demo.py --model models/segmentation/alas_engine.trt --video walk.mp4
+    python eval/navigation/local_planner/vfh_demo.py --model models/segmentation/alas_engine.trt --camera 0
+    python eval/navigation/local_planner/vfh_demo.py --no-model --mask-image mask.png
+"""
 
 import argparse
 import logging
-import os
 import sys
 import time
 from pathlib import Path
@@ -37,16 +32,19 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-# Make sub-packages importable when invoked from anywhere.
-_SRC_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if _SRC_DIR not in sys.path:
-    sys.path.insert(0, _SRC_DIR)
+# Make src/ importable, and the sibling visualizer module too, whether run from
+# the repository root or from anywhere else.
+_HERE = Path(__file__).resolve()
+_REPO_ROOT = next(p for p in _HERE.parents if (p / "src").is_dir())
+for _path in (str(_REPO_ROOT / "src"), str(_HERE.parent)):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 from ai.geometry import CameraGeometry
 from ai.perception import PerceptionPipeline, analyse_scene
 from main.config import ALASConfig
 from navigation.local_planner import VFHPlanner
-from navigation.local_planner.vfh_visualizer import draw_overlay
+from vfh_visualizer import draw_overlay
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,7 +53,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("vfh_demo")
 
-_OUTPUT_DIR = Path(_SRC_DIR).parent / "outputs"
+_OUTPUT_DIR = _REPO_ROOT / "outputs" / "eval" / "navigation" / "local_planner"
 
 
 def _parse_args(argv=None):
@@ -82,9 +80,9 @@ def _parse_args(argv=None):
 
 def _build_planner(config: ALASConfig) -> VFHPlanner:
     geom = CameraGeometry(
-        height_m=config.camera_height_m,
-        tilt_deg=config.camera_tilt_deg,
-        vfov_deg=config.camera_vfov_deg,
+        height_m=config.ai.camera_height_m,
+        tilt_deg=config.ai.camera_tilt_deg,
+        vfov_deg=config.ai.camera_vfov_deg,
     )
     return VFHPlanner(config, geom)
 
@@ -121,9 +119,9 @@ def _process_one(
         scene = analyse_scene(
             mask,
             camera_geom=CameraGeometry(
-                height_m=planner._cfg.camera_height_m,
-                tilt_deg=planner._cfg.camera_tilt_deg,
-                vfov_deg=planner._cfg.camera_vfov_deg,
+                height_m=planner._cfg.ai.camera_height_m,
+                tilt_deg=planner._cfg.ai.camera_tilt_deg,
+                vfov_deg=planner._cfg.ai.camera_vfov_deg,
             ),
         )
 
@@ -135,9 +133,9 @@ def _process_one(
         mask=mask,
         cost_grid=cost_grid,
         guidance=guidance,
-        blocked_threshold=planner._cfg.vfh_blocked_threshold,
+        blocked_threshold=planner._cfg.vfh.blocked_threshold,
         activated=activated,
-        near_rows_ratio=planner._cfg.vfh_near_rows_ratio,
+        near_rows_ratio=planner._cfg.vfh.near_rows_ratio,
     )
     return guidance, activated, overlay, scene
 
@@ -251,12 +249,12 @@ def main(argv=None) -> int:
         logger.info("Loading segmentation model: %s", args.model)
         pipeline = PerceptionPipeline(
             model_path=args.model,
-            input_h=config.model_input_h,
-            input_w=config.model_input_w,
+            input_h=config.ai.model_input_h,
+            input_w=config.ai.model_input_w,
             camera_geometry=CameraGeometry(
-                height_m=config.camera_height_m,
-                tilt_deg=config.camera_tilt_deg,
-                vfov_deg=config.camera_vfov_deg,
+                height_m=config.ai.camera_height_m,
+                tilt_deg=config.ai.camera_tilt_deg,
+                vfov_deg=config.ai.camera_vfov_deg,
             ),
         )
 
@@ -269,8 +267,8 @@ def main(argv=None) -> int:
         return _run_stream(args, pipeline, planner, cap, label="video")
     if args.camera is not None:
         cap = cv2.VideoCapture(args.camera)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.camera_width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.camera_height)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.ai.camera_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.ai.camera_height)
         return _run_stream(args, pipeline, planner, cap, label="camera")
 
     logger.error("No input mode selected.")
