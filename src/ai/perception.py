@@ -512,37 +512,37 @@ def generate_alerts(
 
 
 # ── Path guidance constants ──────────────────────────────────────────────────
-PATH_BOTTOM_FRACTION   = 0.5   # maskenin alt yarısına bak (kullanıcıya en yakın zemin)
-CORRIDOR_MARGIN        = 0.15  # sol ve sağ kenarda bu kadar piksel yoksay —
-                                # kullanıcı zaten oraya yürümeyecek
-MIN_WALKABLE_FOR_GUIDANCE = 0.08  # koridorda bu oranın altındaysa "yol daralıyor" uyarısı
+PATH_BOTTOM_FRACTION   = 0.5   # Look at the bottom half of the mask (ground nearest the user).
+CORRIDOR_MARGIN        = 0.15  # Ignore this many pixels on the left/right edges —
+                                # the user will not walk into the very edge anyway.
+MIN_WALKABLE_FOR_GUIDANCE = 0.08  # Below this corridor ratio, warn that the path is narrowing.
 
 
 def generate_path_guidance(mask: np.ndarray) -> Optional[str]:
-    """
-    Maskenin alt yarısındaki merkezi yürüyüş koridorunu analiz ederek
-    yön kılavuzu üretir.
+    """Produce directional guidance from the central walking corridor.
 
-    Algoritma:
-      1. Alt yarıyı al (kullanıcıya en yakın zemin bölgesi).
-      2. Sol ve sağ kenar piksellerini yoksay (CORRIDOR_MARGIN).
-         — Kullanıcı ekranın tam kenarına yürümez, oradaki walkable
-           pikseller centroid'i yanıltır.
-      3. Koridoru 3 eşit dilime böl (sol / orta / sağ).
-      4. Her dilimin walkable piksel sayısını karşılaştır:
-         - Orta dilim yeterliyse → "Düz yürüyün"
-         - Değilse en dolu yana yönlendir.
-      5. Toplam walkable oranı düşükse "yol daralıyor" ekle.
+    Analyses the central walking corridor in the bottom half of the mask.
+
+    Algorithm:
+      1. Take the bottom half (the ground region nearest the user).
+      2. Ignore the left/right edge pixels (CORRIDOR_MARGIN) — the user does
+         not walk into the screen edges, and those walkable pixels would skew
+         the centroid.
+      3. Split the corridor into 3 equal slices (left / centre / right).
+      4. Compare each slice's walkable pixel count:
+         - if the centre slice is clear enough -> "go straight";
+         - otherwise steer toward the most open side.
+      5. If the overall walkable ratio is low, append a "narrowing" warning.
 
     Returns:
-        "Düz yürüyün", "Hafif sola yönelin", "Hafif sağa yönelin" gibi
-        Türkçe TTS metni; hiç walkable yoksa None.
+        Turkish TTS text such as "Düz yürüyün", "Hafif sola yönelin", or
+        "Hafif sağa yönelin"; None when there is no walkable area at all.
     """
     h, w = mask.shape
     bottom_start = int(h * (1.0 - PATH_BOTTOM_FRACTION))
     bottom = mask[bottom_start:, :]
 
-    # Merkezi koridor: sol/sağ kenar piksellerini çıkar
+    # Central corridor: drop the left/right edge pixels.
     c_left  = int(w * CORRIDOR_MARGIN)
     c_right = int(w * (1.0 - CORRIDOR_MARGIN))
     corridor = bottom[:, c_left:c_right]
@@ -558,7 +558,7 @@ def generate_path_guidance(mask: np.ndarray) -> Optional[str]:
     if walkable_ratio < MIN_WALKABLE_FOR_GUIDANCE:
         return "Yürünebilir alan çok azalıyor, dikkatli ilerleyin"
 
-    # Koridoru 3 dilime böl ve her dilimin walkable piksel yoğunluğunu hesapla
+    # Split the corridor into 3 slices and compute each slice's walkable density.
     third = corridor_w // 3
     left_px   = float(np.sum(walkable[:, :third]))
     center_px = float(np.sum(walkable[:, third: 2 * third]))

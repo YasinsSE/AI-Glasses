@@ -10,7 +10,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, List, Tuple, Dict
 
-import serial
+try:
+    import serial
+except ImportError:
+    # pyserial is a Jetson-only dependency (see requirements.txt). On a desktop
+    # running with --mock, MockGPSReader is used instead and the real
+    # GPSReader is never instantiated, so a missing pyserial is harmless.
+    serial = None
 
 from .gps_filter import filter_fixes
 
@@ -106,7 +112,7 @@ class GPSReader:
         self.max_speed_kmh = max_speed_kmh
         self.warmup_sec = warmup_sec
 
-        self._ser: Optional[serial.Serial] = None
+        self._ser: "Optional[serial.Serial]" = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._lock = threading.Lock()

@@ -54,37 +54,60 @@ Converts perception outputs into safe, understandable guidance.
 
 The final objective is a portable, locally operating assistive device capable of perceiving the environment, interpreting scene structure, and guiding the user safely through audio feedback.
 
-## SLM Model Kurulumu
+## SLM Model Setup
 
-Base model boyutu büyük olduğu için repoya dahil edilmemiştir.
-İlk kurulumda aşağıdaki komutu çalıştırın:
+The base model is large and is not committed to the repository. On first setup,
+run the following (from the repository root):
 
+```
 pip install huggingface_hub
 huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct model.safetensors --local-dir src/tts_stt/my_custom_slm/
+```
 ---
 
-## Software Modules
+## Project Structure
+
+The repository follows one consistent layout, using the AI segmentation module
+as the template: each module is a self-contained package with its own config
+dataclass; unit tests live in a central `tests/` tree mirroring `src/`; demos
+and benchmarks live in a parallel `eval/` tree.
 
 ```
 src/
-├── ai/
-│   ├── dataset_yolo_format.py   # Dataset preparation and class mapping
-│   └── ...                      # Model training, ONNX export
+├── main/                        # Composition root / orchestration
+│   ├── alas_main.py             # Thin main loop
+│   ├── lifecycle.py             # Modes, signals, graceful shutdown
+│   └── config.py                # ALASConfig — composes the per-module configs + CLI
+├── ai/                          # Template module
+│   ├── ai_config.py             # AIConfig (model, camera, geometry, dispatch cadences)
+│   ├── perception.py            # Segmentation pipeline + scene analysis
+│   ├── perception_service.py    # Camera + inference thread
+│   ├── preprocessing.py, geometry.py, jetson_inference.py
+│   └── dataset/                 # Dataset preparation scripts
 ├── navigation/
-│   └── router/
-│       ├── navigator.py         # Public navigation API (NavigationSystem)
-│       ├── route_calculator.py  # A* pathfinding → step-by-step directions
-│       ├── route_tracker.py     # GPS progress tracking state machine
-│       ├── poi_finder.py        # Nearest POI search (pharmacy, ATM, etc.)
-│       ├── osm_parser.py        # .osm file → in-memory routing graph
-│       ├── geo_utils.py         # Haversine distance, bearing, turn logic
-│       ├── models.py            # Shared data types (Coord, RouteStep, etc.)
-│       └── nav_config.py        # Tunable navigation parameters
-├── sensors/
-│   ├── gps_reader.py            # UART NMEA reader with reconnect & health API
-│   └── gps_filter.py            # Median-based GPS fix filtering
-└── ...
+│   ├── navigation_service.py
+│   ├── router/                  # Offline OSM routing (navigator, A*, POI, …)
+│   │   └── nav_config.py        # NavConfig
+│   ├── sensors/
+│   │   ├── gps_reader.py, gps_filter.py
+│   │   └── sensor_config.py     # GPSConfig + CANDIDATE_PORTS
+│   └── local_planner/
+│       ├── vfh.py               # Vector Field Histogram planner
+│       └── planner_config.py    # VFHConfig
+└── tts_stt/
+    ├── stt.py, tts.py, voice_commands.py, voice_policy.py, button_listener.py
+    ├── slm_classifier.py        # Hybrid intent classifier
+    └── voice_config.py          # VoiceConfig
+
+tests/        # Unit tests, mirrors src/ (see tests/README.md)
+eval/         # Demos & benchmarks, mirrors src/ (see eval/README.md)
+outputs/      # Artifacts: outputs/tests/<module>/ and outputs/eval/<module>/
 ```
+
+Per-module config dataclasses (`AIConfig`, `VFHConfig`, `GPSConfig`, `NavConfig`,
+`VoiceConfig`) hold each module's tunables; `ALASConfig` composes them and is the
+single launch authority, so modules read `config.ai.model_path`,
+`config.gps.port`, and so on.
 
 ### Key Design Decisions
 

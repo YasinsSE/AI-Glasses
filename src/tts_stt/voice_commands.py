@@ -133,8 +133,8 @@ class VoiceCommandHandler:
             # Normal microphone path
             self._voice.say_prompt("Sizi dinliyorum.")
             return self._stt.listen(
-                timeout_sec=self._config.stt_listen_timeout,
-                silence_sec=self._config.stt_silence_sec,
+                timeout_sec=self._config.voice.stt_listen_timeout,
+                silence_sec=self._config.voice.stt_silence_sec,
             )
 
         # Bypass mode: typed input from stdin

@@ -1,20 +1,26 @@
-# =============================================================================
-# ALAS — Single Image Segmentation Test
-# =============================================================================
-# Runs segmentation on a single image file and displays the result.
-#
-# Usage:
-#   python src/ai/test_single_image.py --model models/segmentation/alas_engine.trt --image test.jpg
-#   python src/ai/test_single_image.py --model models/segmentation/alas_model.onnx --image test.jpg
-#   python src/ai/test_single_image.py --model models/segmentation/alas_engine.trt --image test.jpg --save
-# =============================================================================
+"""ALAS — live segmentation viewer / inference eval (lightweight).
 
+Display-oriented evaluation viewer with minimal I/O. Press 'q' to quit, 's' to
+save a single snapshot, 'r' to toggle the raw mask view. Snapshots are written
+under outputs/eval/ai/snapshots/.
+
+How to run (from the repository root):
+    python eval/ai/seg_inference_eval.py --model models/segmentation/alas_engine.trt --gstreamer
+    python eval/ai/seg_inference_eval.py --model models/segmentation/alas_engine.trt --gstreamer --fps 10
+    python eval/ai/seg_inference_eval.py --model models/segmentation/alas_model.onnx
+"""
+
+import os
 import sys
 import time
 import ctypes
 import logging
 from pathlib import Path
 from enum import IntEnum
+
+# Resolve the repository root so outputs land in a fixed location regardless of
+# the current working directory.
+_REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "src").is_dir())
 
 import cv2
 import numpy as np
@@ -24,7 +30,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("alas_img")
+logger = logging.getLogger("alas_live")
 
 
 # =============================================================================
@@ -61,18 +67,18 @@ CLASS_COLORS_BGR = {
 }
 
 CLASS_CONFIG = {
-    ClassID.WALKABLE_SURFACE:   {"priority": 0, "alert": None},
-    ClassID.CROSSWALK:          {"priority": 1, "alert": "Crosswalk"},
-    ClassID.VEHICLE_ROAD:       {"priority": 2, "alert": "Road ahead"},
-    ClassID.COLLISION_OBSTACLE: {"priority": 3, "alert": "Obstacle"},
-    ClassID.FALL_HAZARD:        {"priority": 3, "alert": "Fall hazard"},
-    ClassID.DYNAMIC_HAZARD:     {"priority": 4, "alert": "Moving hazard"},
-    ClassID.VEHICLE:            {"priority": 5, "alert": "Vehicle!"},
+    ClassID.WALKABLE_SURFACE:   {"priority": 0, "alert": None, "cooldown": 0},
+    ClassID.CROSSWALK:          {"priority": 1, "alert": "Crosswalk", "cooldown": 8.0},
+    ClassID.VEHICLE_ROAD:       {"priority": 2, "alert": "Road ahead", "cooldown": 5.0},
+    ClassID.COLLISION_OBSTACLE: {"priority": 3, "alert": "Obstacle", "cooldown": 2.0},
+    ClassID.FALL_HAZARD:        {"priority": 3, "alert": "Fall hazard", "cooldown": 2.0},
+    ClassID.DYNAMIC_HAZARD:     {"priority": 4, "alert": "Moving hazard", "cooldown": 1.5},
+    ClassID.VEHICLE:            {"priority": 5, "alert": "Vehicle!", "cooldown": 1.0},
 }
 
 
 # =============================================================================
-# CUDA Runtime (ctypes)
+# CUDA Runtime (ctypes — no pycuda needed)
 # =============================================================================
 
 class CUDARuntime:
@@ -81,6 +87,7 @@ class CUDARuntime:
 
     def __init__(self):
         self._lib = ctypes.CDLL("libcudart.so")
+
         self._lib.cudaMalloc.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_size_t]
         self._lib.cudaMalloc.restype = ctypes.c_int
         self._lib.cudaFree.argtypes = [ctypes.c_void_p]
@@ -239,7 +246,38 @@ def load_backend(model_path):
 
 
 # =============================================================================
-# Processing
+# Camera
+# =============================================================================
+
+GST_PIPELINE = (
+    "nvarguscamerasrc ! "
+    "video/x-raw(memory:NVMM), width={w}, height={h}, "
+    "format=(string)NV12, framerate=(fraction){fps}/1 ! "
+    "nvvidconv flip-method=0 ! "
+    "video/x-raw, width={w}, height={h}, format=(string)BGRx ! "
+    "videoconvert ! "
+    "video/x-raw, format=(string)BGR ! appsink drop=1"
+)
+
+
+def open_camera(camera_id=0, width=640, height=480, fps=30, use_gstreamer=False):
+    if use_gstreamer:
+        pipeline = GST_PIPELINE.format(w=width, h=height, fps=fps)
+        cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+    else:
+        cap = cv2.VideoCapture(camera_id)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        cap.set(cv2.CAP_PROP_FPS, fps)
+
+    if not cap.isOpened():
+        raise RuntimeError("Cannot open camera")
+    logger.info("Camera: {}x{}@{}fps gst={}".format(width, height, fps, use_gstreamer))
+    return cap
+
+
+# =============================================================================
+# Processing — optimized for Jetson Nano
 # =============================================================================
 
 def preprocess(frame_bgr, target_h, target_w):
@@ -257,15 +295,19 @@ def postprocess(logits):
 
 
 def render_overlay(frame_bgr, mask, alpha=0.45):
+    """Fast overlay — resize mask to frame size, blend colors."""
     h, w = frame_bgr.shape[:2]
     mask_resized = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+
     overlay = np.zeros_like(frame_bgr)
     for cid, color in CLASS_COLORS_BGR.items():
         overlay[mask_resized == cid] = color
+
     return cv2.addWeighted(frame_bgr, 1.0 - alpha, overlay, alpha, 0)
 
 
 def render_color_mask(mask, height, width):
+    """Pure color mask — no camera, just segmentation colors."""
     mask_resized = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
     color_mask = np.zeros((height, width, 3), dtype=np.uint8)
     for cid, color in CLASS_COLORS_BGR.items():
@@ -273,62 +315,66 @@ def render_color_mask(mask, height, width):
     return color_mask
 
 
-def analyze_scene(mask):
-    """Analyze mask and return per-class stats + alerts."""
+def get_alerts(mask, last_alert_time, now):
+    """Lightweight alert generation — no full stats, just check danger zones."""
     h, w = mask.shape
     total = float(h * w)
     third = w // 3
-    results = []
+    alerts = []
 
     for cid in ClassID:
-        binary = (mask == cid)
-        ratio = float(np.sum(binary)) / total
-        if ratio < 0.01:
+        cfg = CLASS_CONFIG[cid]
+        if cfg["priority"] == 0:
             continue
 
-        left   = float(np.sum(binary[:, :third]))
+        ratio = float(np.sum(mask == cid)) / total
+        if ratio < 0.02:
+            continue
+
+        elapsed = now - last_alert_time.get(int(cid), 0.0)
+        if elapsed < cfg["cooldown"]:
+            continue
+
+        # Zone detection on mask directly (cheaper than full stats)
+        binary = (mask == cid)
+        left  = float(np.sum(binary[:, :third]))
         center = float(np.sum(binary[:, third:2*third]))
-        right  = float(np.sum(binary[:, 2*third:]))
+        right = float(np.sum(binary[:, 2*third:]))
+
+        parts = [cfg["alert"]]
+        if ratio > 0.15:
+            parts.append("CLOSE")
+        elif ratio > 0.05:
+            parts.append("near")
+
         best = max(left, center, right)
-
         if best == left:
-            zone = "LEFT"
+            parts.append("L")
         elif best == right:
-            zone = "RIGHT"
-        else:
-            zone = "CENTER"
+            parts.append("R")
 
-        results.append({
-            "class": CLASS_NAMES[cid],
-            "ratio": ratio,
-            "zone": zone,
-            "priority": CLASS_CONFIG[cid]["priority"],
-            "alert": CLASS_CONFIG[cid]["alert"],
-        })
+        alerts.append((cfg["priority"], " ".join(parts)))
+        last_alert_time[int(cid)] = now
 
-    results.sort(key=lambda x: x["priority"], reverse=True)
-    return results
+    alerts.sort(key=lambda x: x[0], reverse=True)
+    return [t for _, t in alerts]
 
 
-def draw_info(frame, inf_ms, scene_results):
-    """Draw inference info, class stats, alerts and legend."""
+def draw_hud(frame, fps, inf_ms, alerts, frame_count):
+    """Draw FPS, inference time, alerts, and legend on frame."""
     h, w = frame.shape[:2]
 
-    # Top bar
+    # FPS bar
     cv2.rectangle(frame, (0, 0), (w, 36), (0, 0, 0), -1)
-    cv2.putText(frame, "Inference: {:.1f}ms".format(inf_ms),
+    cv2.putText(frame, "FPS:{:.1f} Inf:{:.0f}ms F:{}".format(fps, inf_ms, frame_count),
                 (8, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
 
-    # Alerts + stats (right side)
+    # Alerts
     y = 60
-    for r in scene_results:
-        if r["priority"] == 0:
-            continue
-        text = "{} {:.0f}% {}".format(r["alert"], r["ratio"] * 100, r["zone"])
-        color = (0, 0, 255) if r["priority"] >= 3 else (0, 180, 255)
-        cv2.putText(frame, text, (8, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
-        y += 24
+    for alert in alerts[:3]:
+        cv2.putText(frame, alert, (8, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        y += 26
 
     # Legend (bottom-left)
     legend_y = h - 10
@@ -344,108 +390,123 @@ def draw_info(frame, inf_ms, scene_results):
 
 
 # =============================================================================
-# Main
+# Main Live Loop
 # =============================================================================
 
-def run_image(model_path, image_path, input_h=384, input_w=512, save=False):
-    # Load image
-    img = cv2.imread(image_path)
-    if img is None:
-        logger.error("Cannot read image: {}".format(image_path))
-        sys.exit(1)
-
-    logger.info("Image loaded: {} ({}x{})".format(image_path, img.shape[1], img.shape[0]))
-
-    # Load model
+def run_live(
+    model_path,
+    camera_id=0,
+    target_fps=4.0,
+    use_gstreamer=False,
+    input_h=384,
+    input_w=512,
+):
     backend = load_backend(model_path)
+    cap = open_camera(camera_id, use_gstreamer=use_gstreamer)
 
-    # Warmup (first inference is slow on TensorRT)
-    logger.info("Warmup inference...")
-    dummy = preprocess(img, input_h, input_w)
-    backend.predict(dummy)
+    throttle = 1.0 / target_fps
+    last_yield = 0.0
+    last_alert_time = {}
+    frame_count = 0
+    show_raw_mask = False
+    snap_dir = _REPO_ROOT / "outputs" / "eval" / "ai" / "snapshots"
 
-    # Real inference
-    tensor = preprocess(img, input_h, input_w)
-    t0 = time.monotonic()
-    logits = backend.predict(tensor)
-    inf_ms = (time.monotonic() - t0) * 1000.0
+    # EMA for smooth FPS display
+    ema_fps = target_fps
+    ema_alpha = 0.3
 
-    mask = postprocess(logits)
-    logger.info("Inference: {:.1f}ms".format(inf_ms))
+    logger.info("=== LIVE MODE ===")
+    logger.info("Keys: [q] quit | [s] snapshot | [r] toggle mask view")
+    logger.info("Target FPS: {}".format(target_fps))
 
-    # Analyze
-    scene = analyze_scene(mask)
-    logger.info("--- Scene Analysis ---")
-    for r in scene:
-        logger.info("  {:16s} {:5.1f}%  zone={}  priority={}".format(
-            r["class"], r["ratio"] * 100, r["zone"], r["priority"]))
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                continue
 
-    # Render views
-    overlay = render_overlay(img, mask)
-    color_mask = render_color_mask(mask, img.shape[0], img.shape[1])
+            now = time.monotonic()
+            if (now - last_yield) < throttle:
+                continue
+            last_yield = now
 
-    # Add HUD to overlay
-    overlay = draw_info(overlay, inf_ms, scene)
+            t0 = time.monotonic()
 
-    # Side-by-side: original | overlay | color mask
-    # Resize all to same height
-    target_h = 480
-    def resize_to_h(frame, th):
-        ratio = th / float(frame.shape[0])
-        tw = int(frame.shape[1] * ratio)
-        return cv2.resize(frame, (tw, th))
+            # Preprocess + Inference
+            tensor = preprocess(frame, input_h, input_w)
+            t_inf = time.monotonic()
+            logits = backend.predict(tensor)
+            inf_ms = (time.monotonic() - t_inf) * 1000.0
 
-    img_r = resize_to_h(img, target_h)
-    overlay_r = resize_to_h(overlay, target_h)
-    mask_r = resize_to_h(color_mask, target_h)
+            # Postprocess
+            mask = postprocess(logits)
 
-    combined = np.hstack([img_r, overlay_r, mask_r])
+            # Alerts (on mask resolution — fast)
+            timestamp = time.time()
+            alerts = get_alerts(mask, last_alert_time, timestamp)
 
-    # Save if requested
-    if save:
-        stem = Path(image_path).stem
-        out_dir = Path("outputs/segmentation_samples")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_overlay = str(out_dir / "result_{}_overlay.jpg".format(stem))
-        out_mask = str(out_dir / "result_{}_mask.png".format(stem))
-        out_combined = str(out_dir / "result_{}_combined.jpg".format(stem))
+            total_ms = (time.monotonic() - t0) * 1000.0
+            current_fps = 1000.0 / total_ms if total_ms > 0 else 0
+            ema_fps = ema_alpha * current_fps + (1 - ema_alpha) * ema_fps
 
-        cv2.imwrite(out_overlay, overlay)
-        cv2.imwrite(out_mask, mask)
-        cv2.imwrite(out_combined, combined)
-        logger.info("Saved: {}, {}, {}".format(out_overlay, out_mask, out_combined))
+            # Render
+            if show_raw_mask:
+                display = render_color_mask(mask, frame.shape[0], frame.shape[1])
+            else:
+                display = render_overlay(frame, mask)
 
-    # Display
-    cv2.imshow("ALAS: Original | Overlay | Mask", combined)
-    logger.info("Press any key to close...")
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+            display = draw_hud(display, ema_fps, inf_ms, alerts, frame_count)
 
+            # Show
+            cv2.imshow("ALAS Live", display)
+            key = cv2.waitKey(1) & 0xFF
+
+            if key == ord("q"):
+                logger.info("Quit")
+                break
+            elif key == ord("s"):
+                # Save snapshot on demand
+                snap_dir.mkdir(exist_ok=True)
+                ts = int(time.time())
+                cv2.imwrite(str(snap_dir / "snap_{}_{}.jpg".format(frame_count, ts)), display)
+                cv2.imwrite(str(snap_dir / "mask_{}_{}.png".format(frame_count, ts)), mask)
+                logger.info("Snapshot saved: frame {}".format(frame_count))
+            elif key == ord("r"):
+                show_raw_mask = not show_raw_mask
+                logger.info("Raw mask view: {}".format(show_raw_mask))
+
+            for alert in alerts:
+                logger.info("[ALERT] {}".format(alert))
+
+            frame_count += 1
+
+    except KeyboardInterrupt:
+        logger.info("Interrupted")
+    finally:
+        cap.release()
+        time.sleep(0.3)
+        cv2.destroyAllWindows()
+        logger.info("Processed {} frames, avg FPS: {:.1f}".format(frame_count, ema_fps))
+
+
+# =============================================================================
+# Entry Point
+# =============================================================================
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="ALAS -- Image Segmentation")
-    parser.add_argument("--model", required=True,
-                        help="Model file (.onnx or .trt/.engine)")
-    
-    parser.add_argument("--images", nargs='+', required=False,
-                        help="Input image paths",
-                        default=[
-                            "/home/alas/ALAS_PROJECT/AI-Glasses/tests/ai_test/test1.jpeg",
-                            "/home/alas/ALAS_PROJECT/AI-Glasses/tests/ai_test/test2.jpeg",
-                            "/home/alas/ALAS_PROJECT/AI-Glasses/tests/ai_test/test3.jpeg",
-                            "/home/alas/ALAS_PROJECT/AI-Glasses/tests/ai_test/30a1b8f6-e058-4b11-a5b7-c958b323393f.jpeg"
-                        ])
-    parser.add_argument("--save", action="store_true",
-                        help="Save overlay, mask and combined output")
+    parser = argparse.ArgumentParser(description="ALAS -- Live Segmentation Viewer")
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--camera", type=int, default=0)
+    parser.add_argument("--fps", type=float, default=4.0)
+    parser.add_argument("--gstreamer", action="store_true")
 
     args = parser.parse_args()
 
-    for img_path in args.images:
-        print(f"\n[INFO] İşleniyor: {img_path}")
-        run_image(
-            model_path=args.model,
-            image_path=img_path,
-            save=args.save,
-        )
+    run_live(
+        model_path=args.model,
+        camera_id=args.camera,
+        target_fps=args.fps,
+        use_gstreamer=args.gstreamer,
+    )

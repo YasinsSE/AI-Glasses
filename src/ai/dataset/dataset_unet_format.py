@@ -310,22 +310,22 @@ def convert(sanpo_root: Path, output_root: Path, labelmap_path: Path, max_sessio
                 new_img_path = output_root / "images" / split / f"{stem}.png"
                 new_mask_path = output_root / "masks" / split / f"{stem}.png"
 
-                # 0. Hata almamak için taşıma işleminden ÖNCE debug görselini oluştur
+                # 0. Build the debug image BEFORE moving files, to avoid errors.
                 if i == mid_idx:
                     overlay_path = debug_dir / f"{split}_{sid}.png"
                     draw_debug_overlay(frame_path, semantic_mask, overlay_path)
                     stats["debug_overlays"] += 1
 
-                # 1. Orijinal RGB kareyi yeni yere TAŞI (0 alan harcar, anında gerçekleşir)
+                # 1. MOVE the original RGB frame (uses no extra space, instant).
                 shutil.move(str(frame_path), str(new_img_path))
 
-                # 2. Yeni 7-class semantic maskeyi kaydet
+                # 2. Save the new 7-class semantic mask.
                 Image.fromarray(semantic_mask).save(new_mask_path)
 
-                # 3. Orijinal SANPO maskesini SİL (Ekstra alan açar)
+                # 3. DELETE the original SANPO mask (frees extra space).
                 mask_path.unlink(missing_ok=True)
 
-                # Sınıf istatistiklerini topla
+                # Collect per-class statistics.
                 for c in range(NUM_CLASSES):
                     class_pixel_counts[c] += np.sum(semantic_mask == c)
 

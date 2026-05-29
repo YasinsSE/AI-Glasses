@@ -1,8 +1,11 @@
-# nav_config.py
-# All tuneable constants in one place.
-# Pass a NavConfig instance to every module that needs settings.
+"""Navigation (router) configuration.
 
-from dataclasses import dataclass, field
+All tunable constants for the routing subsystem in one place. A ``NavConfig``
+instance is passed to every router module that needs settings, and is composed
+by :class:`main.config.ALASConfig`.
+"""
+
+from dataclasses import dataclass
 
 
 # ---------------------------------------------------------------------------
@@ -33,8 +36,13 @@ class NavConfig:
     steps_time_penalty: float = 2.0        # multiplier for 'steps' road type
 
     # Progress tracking
-    waypoint_threshold_m: float = 15.0     # distance to mark a waypoint as reached
-    off_route_threshold_m: float = 40.0    # extra metres beyond step distance → off-route
+    waypoint_threshold_m: float = 15.0     # Distance to mark a waypoint as reached.
+    off_route_threshold_m: float = 40.0    # Extra metres beyond step distance -> off-route.
+
+    # Navigation announcement cadence (consumed by NavigationService)
+    approach_threshold_m: float = 30.0       # Pre-warn when distance to next step < N.
+    long_stretch_threshold_m: float = 100.0  # > N -> fall back to the periodic reminder.
+    progress_announce_interval: float = 30.0  # "X metres to go" reminder period.
 
     # Logging
     log_dir: str = "."                     # directory for saved JSON files

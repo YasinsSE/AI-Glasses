@@ -54,6 +54,13 @@ class ButtonListener:
         if self._thread is not None:
             self._thread.join(timeout=timeout)
 
+    # ── Thread-like interface (so the lifecycle watchdog can monitor us) ──
+
+    name = "ButtonListener"
+
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     # ── GPIO backend (Jetson Nano) ───────────────────────────────
 
     def _gpio_loop(self) -> None:
@@ -64,24 +71,24 @@ class ButtonListener:
             return
 
         GPIO.setmode(GPIO.BCM)
-        GPIO.setup(self._config.button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        logger.info(f"[Button] GPIO pin {self._config.button_pin} ready (active-low).")
+        GPIO.setup(self._config.voice.button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        logger.info(f"[Button] GPIO pin {self._config.voice.button_pin} ready (active-low).")
 
         try:
             while not self._stop.is_set():
-                if GPIO.input(self._config.button_pin) == GPIO.LOW:
+                if GPIO.input(self._config.voice.button_pin) == GPIO.LOW:
                     self._safe_callback()
                     # Debounce: wait then drain held-down state.
-                    time.sleep(self._config.button_debounce_ms / 1000.0)
+                    time.sleep(self._config.voice.button_debounce_ms / 1000.0)
                     while (
-                        GPIO.input(self._config.button_pin) == GPIO.LOW
+                        GPIO.input(self._config.voice.button_pin) == GPIO.LOW
                         and not self._stop.is_set()
                     ):
                         time.sleep(0.05)
                 time.sleep(0.05)
         finally:
             try:
-                GPIO.cleanup(self._config.button_pin)
+                GPIO.cleanup(self._config.voice.button_pin)
             except Exception:  # noqa: BLE001
                 pass
 

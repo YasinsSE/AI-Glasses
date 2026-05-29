@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""
-ALAS — GPS Test (Jetson Nano)
+"""ALAS — GPS hardware test (Jetson Nano).
 
-Kullanım:
-  cd ~/ALAS/src
-  python3 -m navigation.sensors.test_gps
+Hardware-in-the-loop diagnostic for the NEO-7M UART module. Requires a real
+GPS device and pyserial; it is not a desktop unit test. It verifies raw NMEA
+flow, then reads positions through ``GPSReader`` and logs the fixes.
 
-  # Farklı port / kısa warmup:
-  python3 -m navigation.sensors.test_gps --port /dev/ttyUSB0 --warmup 5
+    Outputs: outputs/tests/navigation/sensors/gps_log.json
+
+How to run (from the repository root):
+    python tests/navigation/sensors/test_gps.py
+    python tests/navigation/sensors/test_gps.py --port /dev/ttyUSB0 --warmup 5
 """
 
 import sys
@@ -17,8 +19,18 @@ import json
 import argparse
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 import serial
+
+# Make src/ importable whether run via pytest or as a standalone script.
+_REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "src").is_dir())
+_SRC = _REPO_ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from navigation.sensors.gps_reader import GPSReader, GPSStatus
+from navigation.sensors.sensor_config import CANDIDATE_PORTS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,40 +38,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger("gps_test")
 
-# ── Olası Jetson Nano portları ──────────────────────────
-CANDIDATE_PORTS = [
-    "/dev/ttyTHS1",   # Jetson Nano 40-pin UART
-    "/dev/ttyTHS2",
-    "/dev/ttyUSB0",   # USB-Serial adapter
-    "/dev/ttyACM0",
-    "/dev/ttyAMA0",   # RPi uyumluluk
-    "/dev/ttyAMA10",  # RPi 5
-]
+_DEFAULT_OUTPUT = _REPO_ROOT / "outputs" / "tests" / "navigation" / "sensors" / "gps_log.json"
 
 
 def detect_port() -> str:
+    """Return the first present candidate serial port, or exit if none exist."""
     for port in CANDIDATE_PORTS:
         if os.path.exists(port):
-            logger.info(f"Bulunan port: {port}")
+            logger.info(f"Found port: {port}")
             return port
 
-    logger.error("Serial port bulunamadı!")
-    logger.error("Kontrol et:")
+    logger.error("No serial port found!")
+    logger.error("Check:")
     logger.error("  ls /dev/tty*")
     logger.error("  sudo dmesg | grep tty")
     sys.exit(1)
 
 
 def test_raw_nmea(port: str, baud: int = 9600, seconds: int = 5) -> bool:
-    """Ham NMEA verisi gelip gelmediğini kontrol et."""
-    logger.info(f"--- HAM NMEA TESTİ ({seconds}sn) ---")
+    """Check whether raw NMEA data is being received on the port."""
+    logger.info(f"--- RAW NMEA TEST ({seconds}s) ---")
     logger.info(f"Port: {port} @ {baud}")
 
     try:
         ser = serial.Serial(port, baud, timeout=2)
     except Exception as e:
-        logger.error(f"Port açılamadı: {e}")
-        logger.error("  sudo usermod -aG dialout $USER  yapıp reboot et")
+        logger.error(f"Could not open port: {e}")
+        logger.error("  Run 'sudo usermod -aG dialout $USER' and reboot")
         return False
 
     count = 0
@@ -87,19 +92,19 @@ def test_raw_nmea(port: str, baud: int = 9600, seconds: int = 5) -> bool:
 
     ser.close()
 
-    logger.info(f"NMEA satır: {count}, RMC: {rmc}, GGA: {gga}")
+    logger.info(f"NMEA lines: {count}, RMC: {rmc}, GGA: {gga}")
 
     if count == 0:
-        logger.error("Hiç veri gelmedi! Kablo bağlantısını kontrol et.")
-        logger.error("  GPS TX → Jetson RX (Pin 10)")
-        logger.error("  GPS RX → Jetson TX (Pin 8)")
-        logger.error("  GND → GND (Pin 6)")
+        logger.error("No data received! Check the wiring.")
+        logger.error("  GPS TX -> Jetson RX (Pin 10)")
+        logger.error("  GPS RX -> Jetson TX (Pin 8)")
+        logger.error("  GND -> GND (Pin 6)")
         return False
 
     if not rmc:
-        logger.warning("RMC yok — uydu bulunamıyor olabilir, açık alanda dene")
+        logger.warning("No RMC — satellites may not be locked; try an open area")
 
-    logger.info("NMEA verisi geliyor.")
+    logger.info("NMEA data is flowing.")
     return True
 
 
@@ -108,25 +113,23 @@ def main():
     parser.add_argument("--port", default=None)
     parser.add_argument("--baud", type=int, default=9600)
     parser.add_argument("--warmup", type=float, default=10.0,
-                        help="Test warmup (sn). Gerçek kullanımda 60")
+                        help="Test warmup (s). Use 60 in real operation.")
     parser.add_argument("--duration", type=int, default=120)
     parser.add_argument("--interval", type=float, default=2.0)
-    parser.add_argument("--output", default="gps_log.json")
+    parser.add_argument("--output", default=str(_DEFAULT_OUTPUT))
     parser.add_argument("--skip-raw", action="store_true")
     args = parser.parse_args()
 
     port = args.port or detect_port()
 
-    # Adım 1: Ham NMEA testi
+    # Step 1: raw NMEA test.
     if not args.skip_raw:
         if not test_raw_nmea(port, args.baud):
             sys.exit(1)
         print()
 
-    # Adım 2: GPSReader ile konum oku
-    logger.info("--- GPSReader TESTİ ---")
-
-    from .gps_reader import GPSReader, GPSStatus
+    # Step 2: read positions through GPSReader.
+    logger.info("--- GPSReader TEST ---")
 
     fixes_log = []
 
@@ -134,11 +137,10 @@ def main():
         port=port,
         baudrate=args.baud,
         warmup_sec=args.warmup,
-        min_sats=0,      # EKLENEN SATIR: Uydu limitini test için sıfırla
-        max_hdop=99.0    # EKLENEN SATIR: Hata payı limitini test için sonuna kadar aç
-
+        min_sats=0,      # Disable the satellite-count gate for testing.
+        max_hdop=99.0,   # Open the HDOP gate fully for testing.
     ) as gps:
-        logger.info(f"GPS başlatıldı. {args.warmup}sn warmup...")
+        logger.info(f"GPS started. {args.warmup}s warmup...")
         t0 = time.time()
 
         try:
@@ -177,9 +179,9 @@ def main():
                 print(line)
 
         except KeyboardInterrupt:
-            logger.info("Ctrl+C — durduruluyor...")
+            logger.info("Ctrl+C — stopping...")
 
-    # Adım 3: Kaydet
+    # Step 3: persist the collected fixes.
     if fixes_log:
         out = {
             "device": "NEO-7M",
@@ -189,20 +191,22 @@ def main():
             "total_fixes": len(fixes_log),
             "fixes": fixes_log,
         }
-        with open(args.output, "w") as f:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
             json.dump(out, f, indent=2, ensure_ascii=False)
 
-        logger.info(f"{len(fixes_log)} fix → {args.output}")
+        logger.info(f"{len(fixes_log)} fixes -> {output_path}")
 
         lats = [f["lat"] for f in fixes_log]
         lons = [f["lon"] for f in fixes_log]
         logger.info(f"  Lat: {min(lats):.6f} – {max(lats):.6f}")
         logger.info(f"  Lon: {min(lons):.6f} – {max(lons):.6f}")
     else:
-        logger.warning("Hiç fix alınamadı!")
-        logger.warning("  1) Açık alanda dene")
-        logger.warning("  2) --warmup 60 dene")
-        logger.warning("  3) Anten bağlı mı kontrol et")
+        logger.warning("No fixes acquired!")
+        logger.warning("  1) Try an open area")
+        logger.warning("  2) Try --warmup 60")
+        logger.warning("  3) Check that the antenna is connected")
 
 
 if __name__ == "__main__":

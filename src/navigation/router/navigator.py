@@ -94,22 +94,21 @@ class NavigationSystem:
         category: str,
         radius_m: Optional[float] = None,
     ) -> Tuple[bool, str, Optional[POIResult]]:
-        """
-        En yakın POI'yi bul ve oraya navigasyonu başlat.
+        """Find the nearest POI and start navigation to it.
 
         Args:
-            position:  Şu anki konumun.
-            category:  
+            position:  Current position.
+            category:  One of:
             'atm', 'bakkal', 'banka', 'benzin', 'cafe', 'eczane',
-            'fuel', 'hastane', 'hospital', 'itfaiye', 'kafe', 
-            'klinik', 'market', 'okul', 'otopark', 'park', 
-            'pharmacy', 'polis', 'restaurant', 'restoran', 
+            'fuel', 'hastane', 'hospital', 'itfaiye', 'kafe',
+            'klinik', 'market', 'okul', 'otopark', 'park',
+            'pharmacy', 'polis', 'restaurant', 'restoran',
             'supermarket'
-            radius_m:  Sadece bu mesafe içinde ara (None = sınırsız).
+            radius_m:  Search only within this distance (None = unbounded).
 
         Returns:
-            (success, message, poi_result)
-            poi_result → bulunan yer bilgisi, başarısızsa None.
+            (success, message, poi_result). poi_result is the found place, or
+            None on failure. ``message`` is user-facing Turkish.
         """
         poi = self._poi_finder.find_nearest(position, category, radius_m=radius_m)
 
@@ -118,8 +117,8 @@ class NavigationSystem:
             logger.warning(f"[Nav] {msg}")
             return False, msg, None
 
-        logger.info(f"[Nav] Hedef: {poi}")
-        print(f"[Nav] Hedef bulundu: {poi}")
+        logger.info(f"[Nav] Target: {poi}")
+        print(f"[Nav] Target found: {poi}")
 
         success, msg = self.start_navigation(position, poi.coord)
         return success, msg, poi
@@ -130,16 +129,15 @@ class NavigationSystem:
         category: str,
         radius_m: Optional[float] = None,
     ) -> List[POIResult]:
-        """
-        Kategoriye uyan tüm yakın POI'leri listele (navigasyon başlatmaz).
+        """List all nearby POIs matching the category (does not start navigation).
 
         Args:
-            position:  Şu anki konumun.
-            category:  Kategori adı.
-            radius_m:  Mesafe filtresi.
+            position:  Current position.
+            category:  Category name.
+            radius_m:  Distance filter.
 
         Returns:
-            POIResult listesi, en yakından uzağa sıralı.
+            A list of POIResult, ordered nearest to farthest.
         """
         return self._poi_finder.find_all(position, category, radius_m)
 

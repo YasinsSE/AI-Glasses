@@ -1,25 +1,24 @@
-"""
-ALAS - SLM Classifier (Tiny NLP)
-=======================================
-STT'den gelen cümlenin niyetini sınıflandırır:
-  - "system_command"  → Programı kontrol eden komutlar (kapat, dur, çıkış)
-  - "navigation"      → Navigasyon sorgusu (eczane bul, neredeyim)
-  - "general"         → Genel konuşma, yok sayılacak cümleler
+"""ALAS — SLM intent classifier (tiny NLP).
 
-Yaklaşım: Hibrit (Kural Katmanı + ML Modeli)
-  1. Kısa komutlar (1-2 kelime) → kural tabanlı eşleşme (kesin sonuç)
-  2. Uzun cümleler → TF-IDF + LogisticRegression (bağlam analizi)
-  3. Confidence threshold → emin değilse "general" döner
+Classifies the intent of a sentence coming from STT:
+  - "system_command"  -> commands that control the program (kapat, dur, çıkış)
+  - "navigation"      -> navigation queries (eczane bul, neredeyim)
+  - "general"         -> general speech, sentences to be ignored
 
-Kullanım:
+Approach: hybrid (rule layer + ML model)
+  1. Short commands (1-2 words) -> rule-based match (exact result)
+  2. Longer sentences -> TF-IDF + LogisticRegression (context analysis)
+  3. Confidence threshold -> returns "general" when unsure
+
+Example:
     from tts_stt.slm_classifier import SLMClassifier
 
     clf = SLMClassifier()
     intent, confidence = clf.predict("kapat")
-    # ("system_command", 1.0)  → kural katmanı yakaladı
+    # ("system_command", 1.0)  -> caught by the rule layer
 
     intent, confidence = clf.predict("kapıyı kapat")
-    # ("general", 0.87)  → ML modeli sınıflandırdı
+    # ("general", 0.87)  -> classified by the ML model
 """
 
 import json
@@ -32,8 +31,13 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import cross_val_score
 
+try:
+    from tts_stt.voice_config import VoiceConfig
+except ImportError:
+    from voice_config import VoiceConfig
+
 # ──────────────────────────────────────────────────────────────────────────────
-# DOSYA YOLLARI
+# FILE PATHS
 # ──────────────────────────────────────────────────────────────────────────────
 
 _FILE_DIR = Path(__file__).resolve().parent
@@ -41,16 +45,17 @@ _MODEL_PATH = _FILE_DIR / "slm_model.pkl"
 _DATA_PATH = _FILE_DIR / "slm_data.json"
 
 # ──────────────────────────────────────────────────────────────────────────────
-# VARSAYILAN AYARLAR
+# DEFAULT SETTINGS
 # ──────────────────────────────────────────────────────────────────────────────
 
-DEFAULT_CONFIDENCE_THRESHOLD = 0.60
+# Sourced from VoiceConfig so confidence tuning has a single source of truth.
+DEFAULT_CONFIDENCE_THRESHOLD = VoiceConfig().slm_confidence_threshold
 
 # ──────────────────────────────────────────────────────────────────────────────
-# KURAL KATMANI
-# Kısa komutlar (1-2 kelime) için kesin eşleşme.
-# ML modeli bu kısa kelimelerde karakter benzerliği yüzünden zorlanıyor,
-# kural katmanı bu sorunu çözer.
+# RULE LAYER
+# Exact matching for short commands (1-2 words). The ML model struggles with
+# these short words due to character similarity; the rule layer fixes that.
+# The keyword sets below are the user's spoken Turkish vocabulary (functional).
 # ──────────────────────────────────────────────────────────────────────────────
 
 EXACT_SYSTEM_COMMANDS = {
@@ -69,36 +74,36 @@ GENERAL_OBJECT_SUFFIXES = {"kapat", "kapa", "durdur"}
 
 
 def _rule_based_predict(text: str) -> tuple[str, float] | None:
-    """
-    Kural tabanlı sınıflandırma. Eşleşme varsa (intent, 1.0) döner.
-    Eşleşme yoksa None döner → ML modeline düşer.
+    """Rule-based classification.
+
+    Returns (intent, 1.0) on a match, or None (falls through to the ML model).
     """
     words = text.strip().lower().split()
 
     if not words:
         return ("general", 1.0)
 
-    # Tek kelime → exact match
+    # Single word -> exact match.
     if len(words) == 1:
         if words[0] in EXACT_SYSTEM_COMMANDS:
             return ("system_command", 1.0)
         return None
 
-    # İki kelime → kalıp analizi
+    # Two words -> pattern analysis (example phrases kept in Turkish).
     if len(words) == 2:
         first, second = words
 
-        # "tamam kapat", "tamam dur", "tamam çık" → system_command
+        # "tamam kapat", "tamam dur", "tamam çık" -> system_command
         if first == "tamam" and second in EXACT_SYSTEM_COMMANDS:
             return ("system_command", 1.0)
 
-        # "artık yeter", "dur artık", "kapat artık" → system_command
+        # "artık yeter", "dur artık", "kapat artık" -> system_command
         if second == "artık" and first in EXACT_SYSTEM_COMMANDS:
             return ("system_command", 1.0)
         if first == "artık" and second in EXACT_SYSTEM_COMMANDS:
             return ("system_command", 1.0)
 
-        # "navigasyonu kapat", "sesi durdur" → system_command
+        # "navigasyonu kapat", "sesi durdur" -> system_command
         if first in SYSTEM_PREFIXES and second in GENERAL_OBJECT_SUFFIXES:
             return ("system_command", 1.0)
 
@@ -106,17 +111,17 @@ def _rule_based_predict(text: str) -> tuple[str, float] | None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# VERİ YÜKLEME
+# DATA LOADING
 # ──────────────────────────────────────────────────────────────────────────────
 
 def load_training_data(data_path: str | None = None) -> list[tuple[str, str]]:
-    """slm_data.json dosyasından eğitim verisini yükler."""
+    """Load the training data from slm_data.json."""
     path = data_path or str(_DATA_PATH)
 
     if not os.path.isfile(path):
         raise FileNotFoundError(
-            f"Eğitim verisi bulunamadı: {path}\n"
-            "slm_data.json dosyasını src/tts_stt/ klasörüne koyun."
+            f"Training data not found: {path}\n"
+            "Place slm_data.json in the src/tts_stt/ folder."
         )
 
     with open(path, "r", encoding="utf-8") as f:
@@ -128,20 +133,20 @@ def load_training_data(data_path: str | None = None) -> list[tuple[str, str]]:
         for sentence in sentences:
             training_data.append((sentence, label))
 
-    print(f"[SLM] Veri yüklendi: {len(training_data)} cümle "
-          f"({sum(1 for _, l in training_data if l == 'system_command')} komut, "
-          f"{sum(1 for _, l in training_data if l == 'navigation')} navigasyon, "
-          f"{sum(1 for _, l in training_data if l == 'general')} genel)")
+    print(f"[SLM] Data loaded: {len(training_data)} sentences "
+          f"({sum(1 for _, l in training_data if l == 'system_command')} commands, "
+          f"{sum(1 for _, l in training_data if l == 'navigation')} navigation, "
+          f"{sum(1 for _, l in training_data if l == 'general')} general)")
 
     return training_data
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# EĞİTİM
+# TRAINING
 # ──────────────────────────────────────────────────────────────────────────────
 
 def train_model(data_path: str | None = None, save_path: str | None = None) -> Pipeline:
-    """TF-IDF + LogisticRegression modeli eğitir ve kaydeder."""
+    """Train and save the TF-IDF + LogisticRegression model."""
     training_data = load_training_data(data_path)
     texts = [t for t, _ in training_data]
     labels = [l for _, l in training_data]
@@ -169,17 +174,17 @@ def train_model(data_path: str | None = None, save_path: str | None = None) -> P
     save_to = save_path or str(_MODEL_PATH)
     with open(save_to, "wb") as f:
         pickle.dump(pipeline, f)
-    print(f"[SLM] Model kaydedildi: {save_to}")
+    print(f"[SLM] Model saved: {save_to}")
 
     return pipeline
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SINIFLANDIRICI
+# CLASSIFIER
 # ──────────────────────────────────────────────────────────────────────────────
 
 class SLMClassifier:
-    """Hibrit intent sınıflandırıcı: kural katmanı + ML modeli."""
+    """Hybrid intent classifier: rule layer + ML model."""
 
     def __init__(
         self,
@@ -190,21 +195,20 @@ class SLMClassifier:
         path = model_path or str(_MODEL_PATH)
 
         if not os.path.isfile(path):
-            print("[SLM] Model bulunamadı, eğitiliyor...")
+            print("[SLM] Model not found, training...")
             self.pipeline = train_model()
         else:
             with open(path, "rb") as f:
                 self.pipeline = pickle.load(f)
-            print(f"[SLM] Model yüklendi ✓ (threshold: {self.threshold})")
+            print(f"[SLM] Model loaded ✓ (threshold: {self.threshold})")
 
     def predict(self, text: str) -> tuple[str, float]:
-        """
-        Cümlenin niyetini tahmin et.
+        """Predict the intent of a sentence.
 
-        Akış:
-          1. Kural katmanı → kesin eşleşme varsa direkt döner
-          2. ML modeli → TF-IDF + LogReg ile sınıflandır
-          3. Threshold kontrolü → emin değilse "general" döner
+        Flow:
+          1. Rule layer -> returns immediately on an exact match
+          2. ML model -> classify with TF-IDF + LogReg
+          3. Threshold check -> returns "general" when unsure
 
         Returns
         -------
@@ -215,50 +219,50 @@ class SLMClassifier:
         if not text:
             return ("general", 1.0)
 
-        # 1. Kural katmanı
+        # 1. Rule layer.
         rule_result = _rule_based_predict(text)
         if rule_result is not None:
             return rule_result
 
-        # 2. ML modeli
+        # 2. ML model.
         proba = self.pipeline.predict_proba([text])[0]
         classes = self.pipeline.classes_
         best_idx = proba.argmax()
         intent = classes[best_idx]
         confidence = float(proba[best_idx])
 
-        # 3. Threshold kontrolü
+        # 3. Threshold check.
         if confidence < self.threshold:
             return ("general", confidence)
 
         return (intent, confidence)
 
     def retrain(self, data_path: str | None = None):
-        """slm_data.json güncellendikten sonra modeli yeniden eğit."""
+        """Re-train the model after slm_data.json has been updated."""
         self.pipeline = train_model(data_path)
-        print("[SLM] Model yeniden eğitildi ✓")
+        print("[SLM] Model re-trained ✓")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# TEST & EĞİTİM
+# TEST & TRAINING
 # ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     print("=" * 70)
-    print("  ALAS SLM Classifier v1.2 - Hibrit (Kural + ML)")
+    print("  ALAS SLM Classifier v1.2 - Hybrid (Rule + ML)")
     print("=" * 70)
 
-    # Eski modeli sil ve yeniden eğit
+    # Delete the old model and re-train.
     if _MODEL_PATH.exists():
         _MODEL_PATH.unlink()
-        print("[SLM] Eski model silindi, yeniden eğitiliyor...")
+        print("[SLM] Old model deleted, re-training...")
 
     model = train_model()
     clf = SLMClassifier()
 
-    # Test cümleleri
+    # Test sentences (Turkish inputs kept on purpose).
     test_cases = [
-        # ── system_command beklenen ──
+        # ── expected: system_command ──
         ("kapat",               "system_command"),
         ("programı kapat",      "system_command"),
         ("navigasyonu durdur",  "system_command"),
@@ -269,7 +273,7 @@ if __name__ == "__main__":
         ("dur",                 "system_command"),
         ("tamam kapat",         "system_command"),
         ("artık yeter",         "system_command"),
-        # ── navigation beklenen ──
+        # ── expected: navigation ──
         ("eczane bul",          "navigation"),
         ("en yakın eczane",     "navigation"),
         ("market nerede",       "navigation"),
@@ -277,7 +281,7 @@ if __name__ == "__main__":
         ("neredeyim",           "navigation"),
         ("ilaç lazım",          "navigation"),
         ("para çekmem lazım",   "navigation"),
-        # ── general beklenen ──
+        # ── expected: general ──
         ("kapıyı kapat",        "general"),
         ("pencereyi kapat",     "general"),
         ("arabayı durdur",      "general"),
@@ -285,13 +289,13 @@ if __name__ == "__main__":
         ("başım ağrıyor",       "general"),
         ("kutuyu kapat",        "general"),
         ("televizyonu kapat",   "general"),
-        # ── belirsiz ──
+        # ── ambiguous ──
         ("asdfghjkl",           "general"),
         ("hmm",                 "general"),
     ]
 
     print(f"\nConfidence threshold: {clf.threshold}")
-    print(f"\n{'Cümle':<25} {'Beklenen':<18} {'Tahmin':<18} {'Güven':<8} {'Sonuç'}")
+    print(f"\n{'Sentence':<25} {'Expected':<18} {'Predicted':<18} {'Conf':<8} {'Result'}")
     print("-" * 80)
 
     correct = 0
@@ -304,7 +308,7 @@ if __name__ == "__main__":
             correct += 1
         note = ""
         if conf < clf.threshold:
-            note = " (threshold altı)"
+            note = " (below threshold)"
         print(f"{text:<25} {expected:<18} {intent:<18} {conf:<8.2f} {match}{note}")
 
-    print(f"\nDoğruluk: {correct}/{total} ({correct/total*100:.0f}%)")
+    print(f"\nAccuracy: {correct}/{total} ({correct/total*100:.0f}%)")

@@ -1,12 +1,14 @@
-# poi_finder.py
-# .osm dosyasından belirli kategorideki yerleri (eczane, hastane, market vb.) bulur.
-# En yakın POI'yi döndürür ve NavigationSystem ile doğrudan kullanılabilir.
-#
-# Kullanım:
-#   finder = POIFinder("map.osm")
-#   result = finder.find_nearest(Coord(39.924, 32.845), category="pharmacy")
-#   if result:
-#       nav.start_navigation(my_position, result.coord)
+"""POI finder — locates places of a given category in an .osm file.
+
+Finds places of a given category (pharmacy, hospital, market, …) in an .osm
+file, returns the nearest POI, and can be used directly with NavigationSystem.
+
+Example:
+    finder = POIFinder("map.osm")
+    result = finder.find_nearest(Coord(39.924, 32.845), category="pharmacy")
+    if result:
+        nav.start_navigation(my_position, result.coord)
+"""
 
 import xml.sax as sax
 import logging
@@ -20,24 +22,25 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# POI kategorileri → OSM tag karşılıkları
+# POI categories -> OSM tag equivalents
 # ---------------------------------------------------------------------------
 
-# Komuttan gelen kelime → OSM amenity/shop/healthcare tag değeri
+# Spoken/typed keyword -> OSM amenity/shop/healthcare tag value. Turkish keys
+# are intentional: they are the words the user actually speaks.
 CATEGORY_MAP: Dict[str, List[str]] = {
-    # Sağlık
+    # Health
     "eczane":        ["pharmacy"],
     "pharmacy":      ["pharmacy"],
     "hastane":       ["hospital", "clinic"],
     "hospital":      ["hospital", "clinic"],
     "klinik":        ["clinic"],
 
-    # Market / Alışveriş
+    # Market / shopping
     "market":        ["supermarket", "convenience", "grocery"],
     "supermarket":   ["supermarket"],
     "bakkal":        ["convenience", "grocery"],
 
-    # Diğer
+    # Other
     "restoran":      ["restaurant", "fast_food", "food_court"],
     "restaurant":    ["restaurant", "fast_food"],
     "kafe":          ["cafe"],
@@ -55,32 +58,32 @@ CATEGORY_MAP: Dict[str, List[str]] = {
 
 
 # ---------------------------------------------------------------------------
-# Veri modeli
+# Data model
 # ---------------------------------------------------------------------------
 
 @dataclass
 class POIResult:
-    """Bulunan bir POI noktası."""
+    """A single discovered POI."""
     name: str
-    category: str          # kullanıcının girdiği kategori kelimesi
-    osm_type: str          # OSM'deki amenity/shop değeri
+    category: str          # Category keyword the user entered.
+    osm_type: str          # amenity/shop value from OSM.
     coord: Coord
-    distance_m: float      # kullanıcıdan uzaklık (metre)
+    distance_m: float      # Distance from the user (metres).
 
     def __str__(self) -> str:
-        return f"{self.name} ({self.osm_type}) — {int(self.distance_m)} m uzakta"
+        return f"{self.name} ({self.osm_type}) — {int(self.distance_m)} m away"
 
 
 # ---------------------------------------------------------------------------
-# SAX parser — sadece node'ları ve ilgili tag'leri okur
+# SAX parser — reads only nodes and their relevant tags
 # ---------------------------------------------------------------------------
 
 class _POIHandler(sax.ContentHandler):
-    """OSM dosyasını tarayıp POI node'larını toplar."""
+    """Scans the OSM file and collects POI nodes."""
 
     def __init__(self, osm_types: List[str]) -> None:
         self.osm_types = set(osm_types)
-        self.results: List[dict] = []          # ham veri
+        self.results: List[dict] = []          # Raw data.
 
         self._curr_node: Optional[dict] = None
         self._curr_tags: Dict[str, str] = {}
@@ -102,7 +105,7 @@ class _POIHandler(sax.ContentHandler):
             self._curr_tags = {}
 
     def _check_and_save(self) -> None:
-        """Node ilgili bir POI mi? Öyleyse listeye ekle."""
+        """If the current node is a relevant POI, add it to the list."""
         amenity = self._curr_tags.get("amenity", "")
         shop    = self._curr_tags.get("shop", "")
         osm_val = amenity or shop
@@ -111,24 +114,23 @@ class _POIHandler(sax.ContentHandler):
             self.results.append({
                 "lat":      self._curr_node["lat"],
                 "lon":      self._curr_node["lon"],
-                "name":     self._curr_tags.get("name", "İsimsiz"),
+                "name":     self._curr_tags.get("name", "Unnamed"),
                 "osm_type": osm_val,
             })
 
 
 # ---------------------------------------------------------------------------
-# Ana sınıf
+# Main class
 # ---------------------------------------------------------------------------
 
 class POIFinder:
-    """
-    .osm dosyasında yakın çevredeki POI'leri bulan modül.
+    """Finds nearby POIs in an .osm file.
 
-    OSM dosyasını her aramada baştan okur — büyük haritalarda
-    yavaş olabilir. İstersen load_map() gibi bir önbellek eklenebilir.
+    Re-reads the OSM file on every search — this can be slow on large maps.
+    A cache (e.g. a load_map() method) could be added if needed.
 
     Args:
-        osm_file: Kullandığın .osm dosyasının yolu.
+        osm_file: Path to the .osm file to use.
     """
 
     def __init__(self, osm_file: str) -> None:
@@ -145,18 +147,17 @@ class POIFinder:
         max_results: int = 1,
         radius_m: Optional[float] = None,
     ) -> Optional[POIResult]:
-        """
-        Konuma en yakın POI'yi döndürür.
+        """Return the POI nearest to the given position.
 
         Args:
-            position:    Şu anki konumun.
-            category:    Türkçe veya İngilizce kategori adı
-                         ("eczane", "pharmacy", "hastane", "market" …)
-            max_results: Kaç tane sonuç döndürülsün (default 1 = sadece en yakın).
-            radius_m:    Sadece bu mesafe içindeki POI'leri dahil et (None = sınırsız).
+            position:    Current position.
+            category:    Turkish or English category name
+                         ("eczane", "pharmacy", "hastane", "market", …).
+            max_results: How many results to return (default 1 = nearest only).
+            radius_m:    Only include POIs within this distance (None = unbounded).
 
         Returns:
-            En yakın POIResult, bulunamazsa None.
+            The nearest POIResult, or None if none found.
         """
         all_results = self.find_all(position, category, radius_m)
         if not all_results:
@@ -169,24 +170,23 @@ class POIFinder:
         category: str,
         radius_m: Optional[float] = None,
     ) -> List[POIResult]:
-        """
-        Kategoriye uyan tüm POI'leri mesafeye göre sıralı döndürür.
+        """Return all matching POIs, sorted by distance.
 
         Args:
-            position:  Şu anki konumun.
-            category:  Kategori adı.
-            radius_m:  Mesafe filtresi (metre). None = sınırsız.
+            position:  Current position.
+            category:  Category name.
+            radius_m:  Distance filter (metres). None = unbounded.
 
         Returns:
-            POIResult listesi, en yakından en uzağa sıralı.
+            A list of POIResult, ordered nearest to farthest.
         """
         osm_types = self._resolve_category(category)
         if not osm_types:
-            logger.warning(f"[POIFinder] Bilinmeyen kategori: '{category}'")
-            logger.info(f"[POIFinder] Geçerli kategoriler: {sorted(CATEGORY_MAP.keys())}")
+            logger.warning(f"[POIFinder] Unknown category: '{category}'")
+            logger.info(f"[POIFinder] Valid categories: {sorted(CATEGORY_MAP.keys())}")
             return []
 
-        logger.info(f"[POIFinder] '{category}' için {self.osm_file} taranıyor...")
+        logger.info(f"[POIFinder] Scanning {self.osm_file} for '{category}'...")
         raw_pois = self._parse(osm_types)
 
         results: List[POIResult] = []
@@ -206,11 +206,11 @@ class POIFinder:
             ))
 
         results.sort(key=lambda r: r.distance_m)
-        logger.info(f"[POIFinder] {len(results)} sonuç bulundu.")
+        logger.info(f"[POIFinder] {len(results)} result(s) found.")
         return results
 
     def list_categories(self) -> List[str]:
-        """Desteklenen kategori isimlerini döndürür."""
+        """Return the supported category names."""
         return sorted(CATEGORY_MAP.keys())
 
     # ------------------------------------------------------------------
@@ -218,17 +218,17 @@ class POIFinder:
     # ------------------------------------------------------------------
 
     def _resolve_category(self, category: str) -> List[str]:
-        """Kullanıcı kelimesini OSM tag listesine çevirir."""
+        """Translate the user keyword into a list of OSM tags."""
         return CATEGORY_MAP.get(category.lower().strip(), [])
 
     def _parse(self, osm_types: List[str]) -> List[dict]:
-        """OSM dosyasını SAX ile tara, ilgili node'ları topla."""
+        """Scan the OSM file with SAX and collect the relevant nodes."""
         handler = _POIHandler(osm_types)
         parser = sax.make_parser()
         parser.setContentHandler(handler)
         try:
             parser.parse(self.osm_file)
         except Exception as e:
-            logger.error(f"[POIFinder] OSM parse hatası: {e}")
+            logger.error(f"[POIFinder] OSM parse error: {e}")
             return []
         return handler.results

@@ -14,9 +14,9 @@ def build_gps(config):
         gps = MockGPSReader()
     else:
         gps = GPSReader(
-            port=config.gps_port,
-            baudrate=config.gps_baudrate,
-            warmup_sec=config.gps_warmup_sec,
+            port=config.gps.port,
+            baudrate=config.gps.baudrate,
+            warmup_sec=config.gps.warmup_sec,
         )
     gps.start()
     return gps
