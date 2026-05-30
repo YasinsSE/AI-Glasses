@@ -35,6 +35,7 @@ from main import lifecycle
 from main.config import ALASConfig
 from main.lifecycle import SystemMode
 from main.logging_config import configure_logging
+from main.session_recorder import build_recorder
 from ai.perception_service import PerceptionService
 from navigation.local_planner import VFHPlanner
 from navigation.navigation_service import NavigationService
@@ -57,6 +58,12 @@ def main():
     voice = VoicePolicy(config)
     voice.announce_boot()
 
+    # 2b. Field-test black-box recorder (--record). NullRecorder when disabled or
+    #     when disk space is too low (it warns over TTS but keeps the system running).
+    recorder = build_recorder(config, voice)
+    voice.set_recorder(recorder)
+    modes.set_recorder(recorder)
+
     # 3. GPS sensor — real UART or deterministic mock, already started.
     gps = build_gps(config)
 
@@ -72,10 +79,10 @@ def main():
 
     perception = (
         None if config.no_camera
-        else PerceptionService(config, voice, modes, stop_event, nav=nav, vfh=vfh)
+        else PerceptionService(config, voice, modes, stop_event, nav=nav, vfh=vfh, recorder=recorder)
     )
-    navigation = NavigationService(config, nav, gps, voice, modes, stop_event)
-    commands = VoiceCommandHandler(config, nav, gps, None, voice, modes, stop_event)
+    navigation = NavigationService(config, nav, gps, voice, modes, stop_event, recorder=recorder)
+    commands = VoiceCommandHandler(config, nav, gps, None, voice, modes, stop_event, recorder=recorder)
 
     def _load_and_attach_stt():
         try:
@@ -129,6 +136,7 @@ def main():
         gps=gps,
         voice=voice,
         modes=modes,
+        recorder=recorder,
     )
     logger.info("[Main] ======== ALAS SYSTEM STOPPED ========")
 

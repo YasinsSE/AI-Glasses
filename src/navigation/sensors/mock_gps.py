@@ -7,6 +7,8 @@ unaware that a hardware GPS is not connected. Implements the same
 """
 
 import logging
+import time
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from .gps_reader import GPSHealth, GPSStatus
@@ -29,6 +31,11 @@ class MockGPSReader:
 
     def get_coord(self) -> Optional[Tuple[float, float, float]]:
         return (self._lat, self._lon, 0.0)
+
+    def get_utc(self) -> Optional[Tuple[datetime, float]]:
+        # The desktop clock is trustworthy under --mock, so expose it as the
+        # "satellite" UTC so the recorder's clock_sync path is exercised.
+        return datetime.now(timezone.utc), time.monotonic()
 
     def get_health(self) -> GPSHealth:
         return GPSHealth(

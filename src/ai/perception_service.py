@@ -48,6 +48,7 @@ class PerceptionService(threading.Thread):
         stop_event: threading.Event,
         nav=None,
         vfh: Optional[VFHPlanner] = None,
+        recorder=None,
     ) -> None:
         super().__init__(name="PerceptionService", daemon=True)
         self._config = config
@@ -56,6 +57,8 @@ class PerceptionService(threading.Thread):
         self._stop_event = stop_event
         self._nav = nav  # NavigationSystem reference for crosswalk filtering.
         self._vfh = vfh  # Optional local planner; None disables VFH guidance.
+        from main.session_recorder import NullRecorder
+        self._rec = recorder or NullRecorder()  # field-test black-box recorder
 
         self._pipeline: Optional[PerceptionPipeline] = None
         self._cap = None  # cv2.VideoCapture, lazy import.
@@ -208,7 +211,7 @@ class PerceptionService(threading.Thread):
                 self._stop_event.wait(0.5)
                 continue
 
-            self._dispatch(result)
+            self._dispatch(result, frame)
 
             # FPS health log — surfaces the case where inference itself is
             # already slower than the requested interval.
@@ -236,7 +239,7 @@ class PerceptionService(threading.Thread):
 
     # ── Alert dispatch ───────────────────────────────────────────
 
-    def _dispatch(self, result) -> None:
+    def _dispatch(self, result, frame=None) -> None:
         """Filter, dedupe, and forward perception output to the voice policy.
 
         Three independent decisions:
@@ -277,13 +280,22 @@ class PerceptionService(threading.Thread):
         else:
             message = None
 
+        spoke = False
         if message and self._should_speak(message, now):
             self._voice.say_obstacle(message)
             self._last_spoken = (message, now)
+            spoke = True
             if top_alert is not None and self._pipeline is not None:
                 # Cooldown is consumed only by speech that actually reached
                 # the user, never by a candidate that lost to dedupe.
                 self._pipeline.mark_alert_spoken(top_alert.class_id)
+
+        # Field-test recorder: log every frame's outcome, and save an annotated
+        # overlay only when we actually warned the user (throttled in the recorder).
+        self._rec.log_perception(result, chosen=message if spoke else None)
+        if spoke and frame is not None:
+            tag = (result.scene.dominant_hazard or "alert").replace(" ", "_")
+            self._rec.maybe_save_overlay(frame, result.mask, tag)
 
         if not result.scene.is_safe:
             logger.info(

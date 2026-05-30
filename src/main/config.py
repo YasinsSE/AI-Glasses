@@ -34,6 +34,17 @@ def _resolve(path: str) -> str:
 
 
 @dataclass
+class RecorderConfig:
+    """Tunables for the field-test black-box recorder (see session_recorder.py)."""
+    overlay_jpeg_quality: int = 65       # cv2 JPEG quality for saved overlays (lower = smaller/faster).
+    frame_min_interval_s: float = 1.5    # Minimum gap between saved overlay frames.
+    telemetry_interval_s: float = 5.0    # SoC temperature / load sampling period.
+    checkpoint_interval_s: float = 30.0  # Rolling summary_partial.md rewrite period.
+    queue_maxsize: int = 200             # Bounded queue; full -> drop (OOM protection).
+    min_free_mb: int = 500               # Refuse to record below this free disk space.
+
+
+@dataclass
 class ALASConfig:
     # ── Composed module configs ──────────────────────────────────
     ai: AIConfig = field(default_factory=AIConfig)
@@ -45,6 +56,12 @@ class ALASConfig:
     # ── Cross-cutting paths ──────────────────────────────────────
     osm_map_path: str = "navigation/router/map.osm"
     log_dir: str = "src/logs"
+
+    # ── Field-test recorder ──────────────────────────────────────
+    rec: RecorderConfig = field(default_factory=RecorderConfig)
+    record: bool = False               # --record: enable the black-box recorder.
+    live: bool = False                 # --live: one-line stdout dashboard.
+    record_dir: str = "outputs/field_tests"
 
     # ── Boot / warmup / sleep ────────────────────────────────────
     warmup_timeout_sec: float = 90.0      # await_ready max wait before forcing ACTIVE.
@@ -74,6 +91,10 @@ class ALASConfig:
                             help="Skip GPS/model warmup — jump straight to ACTIVE mode")
         parser.add_argument("--bypass-gps-warmup", action="store_true",
                             help="Skip only the GPS readiness wait (e.g. indoor dev)")
+        parser.add_argument("--record", action="store_true",
+                            help="Enable the field-test black-box recorder")
+        parser.add_argument("--live", action="store_true",
+                            help="Print a one-line live status dashboard to stdout")
         args = parser.parse_args(argv)
 
         config = cls()
@@ -94,6 +115,8 @@ class ALASConfig:
         config.bypass_stt = args.bypass_stt
         config.bypass_warmup = args.bypass_warmup
         config.bypass_gps_warmup = args.bypass_gps_warmup
+        config.record = args.record
+        config.live = args.live
 
         # Anchor relative paths to src/ so the entry point can be invoked from
         # any working directory, and propagate the log dir into the router.
@@ -101,4 +124,9 @@ class ALASConfig:
         config.ai.model_path = _resolve(config.ai.model_path)
         config.log_dir = _resolve(config.log_dir)
         config.nav.log_dir = config.log_dir
+        # ``outputs/`` lives at the repository root (one level above src/).
+        if not os.path.isabs(config.record_dir):
+            config.record_dir = os.path.normpath(
+                os.path.join(os.path.dirname(_SRC_ROOT), config.record_dir)
+            )
         return config

@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, List, Tuple, Dict
 
@@ -72,6 +73,18 @@ def _to_decimal(raw: str, hemi: str) -> Optional[float]:
         return None
 
 
+def _parse_rmc_datetime(time_field: str, date_field: str) -> Optional[datetime]:
+    """Build a UTC datetime from RMC time (hhmmss.ss) and date (ddmmyy) fields."""
+    try:
+        if len(time_field) < 6 or len(date_field) < 6:
+            return None
+        hh, mm, ss = int(time_field[0:2]), int(time_field[2:4]), int(time_field[4:6])
+        day, mon, yr = int(date_field[0:2]), int(date_field[2:4]), 2000 + int(date_field[4:6])
+        return datetime(yr, mon, day, hh, mm, ss, tzinfo=timezone.utc)
+    except (ValueError, IndexError):
+        return None
+
+
 # Constants
 MAX_SERIAL_ERRORS = 10
 RECONNECT_WAIT_SEC = 3.0
@@ -129,6 +142,12 @@ class GPSReader:
         self._serial_ok: bool = False
         self._last_fix_time: float = 0.0
 
+        # Satellite UTC datetime from the NMEA RMC sentence, paired with the
+        # monotonic instant it was captured. Used as a trustworthy absolute-time
+        # anchor when the device has no RTC (see SessionRecorder clock_sync).
+        self._utc: "Optional[datetime]" = None
+        self._utc_mono: float = 0.0
+
     # ── Lifecycle ─────────────────────────────────────────────
 
     def start(self) -> None:
@@ -171,6 +190,19 @@ class GPSReader:
         return False
 
     # ── Public API ────────────────────────────────────────────
+
+    def get_utc(self) -> Optional[Tuple[datetime, float]]:
+        """Return the latest satellite UTC datetime and its capture time.
+
+        Returns:
+            (utc_datetime, captured_monotonic) or None if no RMC time seen yet.
+            The monotonic timestamp lets callers anchor a wall-clock offset even
+            when the device has no real-time clock.
+        """
+        with self._lock:
+            if self._utc is None:
+                return None
+            return self._utc, self._utc_mono
 
     def get_coord(self) -> Optional[Tuple[float, float, float]]:
         """Return the latest filtered coordinate or None.
@@ -267,7 +299,7 @@ class GPSReader:
                 self._serial_ok = True
             except (serial.SerialException, OSError) as e:
                 consecutive_errors += 1
-                logger.error(f"Serial hata ({consecutive_errors}/{MAX_SERIAL_ERRORS}): {e}")
+                logger.error(f"Serial error ({consecutive_errors}/{MAX_SERIAL_ERRORS}): {e}")
 
                 if consecutive_errors >= MAX_SERIAL_ERRORS:
                     self._reconnect()
@@ -345,7 +377,8 @@ class GPSReader:
         if lat is None or lon is None:
             return
 
-        rmc_utc = p[1][:6] if len(p[1]) >= 6 else ""
+        # RMC carries satellite UTC: p[1] = time (hhmmss.ss), p[9] = date (ddmmyy).
+        utc_dt = _parse_rmc_datetime(p[1], p[9] if len(p) > 9 else "")
 
         try:
             speed = float(p[7]) * 1.852 if p[7] else 0.0
@@ -367,6 +400,10 @@ class GPSReader:
         with self._lock:
             self._fixes.append((now, lat, lon))
             self._last_fix_time = now
+
+            if utc_dt is not None:
+                self._utc = utc_dt
+                self._utc_mono = now
 
             max_len = int(self.window * 2) + 10
             if len(self._fixes) > max_len:
