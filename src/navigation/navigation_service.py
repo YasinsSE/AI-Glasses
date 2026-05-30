@@ -47,6 +47,7 @@ class NavigationService(threading.Thread):
         voice: VoicePolicy,
         modes: ModeManager,
         stop_event: threading.Event,
+        recorder=None,
     ) -> None:
         super().__init__(name="NavigationService", daemon=True)
         self._config = config
@@ -55,6 +56,8 @@ class NavigationService(threading.Thread):
         self._voice = voice
         self._modes = modes
         self._stop_event = stop_event
+        from main.session_recorder import NullRecorder
+        self._rec = recorder or NullRecorder()  # field-test black-box recorder
 
         self._last_spoken: str = ""
         self._last_progress_time: float = 0.0
@@ -66,7 +69,19 @@ class NavigationService(threading.Thread):
     def run(self) -> None:
         logger.info("[Navigation] Service started.")
         while not self._stop_event.is_set():
-            if self._modes.mode != SystemMode.ACTIVE or not self._nav.is_active:
+            if self._modes.mode != SystemMode.ACTIVE:
+                self._stop_event.wait(self._config.gps.update_interval)
+                continue
+
+            # When ACTIVE with no active route (environment-awareness mode), we
+            # still poll GPS so the field-test recorder captures the track and
+            # the satellite-UTC clock anchor even without a destination set.
+            if not self._nav.is_active:
+                idle_fix = self._gps.get_coord()
+                if idle_fix is not None:
+                    self._record_gps(*idle_fix)
+                else:
+                    self._log_gps_state()
                 self._stop_event.wait(self._config.gps.update_interval)
                 continue
 
@@ -77,6 +92,7 @@ class NavigationService(threading.Thread):
                 continue
 
             lat, lon, age = fix
+            self._record_gps(lat, lon, age)
             if age > self._config.gps.stale_threshold_sec:
                 if not self._stale_announced:
                     self._voice.say_nav("GPS sinyali zayıf, konum güncellenemiyor.")
@@ -98,7 +114,27 @@ class NavigationService(threading.Thread):
 
     # ── Announcement logic ───────────────────────────────────────
 
+    def _record_gps(self, lat: float, lon: float, age: float) -> None:
+        """Log the GPS fix and (once) anchor absolute time from satellite UTC."""
+        try:
+            health = self._gps.get_health()
+            self._rec.log_gps(lat, lon, round(age, 2), health.satellites,
+                              health.hdop, health.status.value)
+        except Exception:  # noqa: BLE001
+            pass
+        get_utc = getattr(self._gps, "get_utc", None)
+        if get_utc is not None:
+            utc = get_utc()
+            if utc is not None:
+                self._rec.note_gps_utc(utc[0], utc[1])
+
     def _announce(self, result: ProgressResult) -> None:
+        step = result.current_step
+        self._rec.log_nav(
+            result.status.value if hasattr(result.status, "value") else result.status,
+            distance_to_next_m=getattr(result, "distance_to_next", None),
+            step_text=(step.text if step is not None else None),
+        )
         if result.status == RouteStatus.WAYPOINT_HIT:
             self._speak_event(result.message)
             self._prewarned_step_id = None  # next step not yet pre-warned

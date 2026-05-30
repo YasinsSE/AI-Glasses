@@ -42,10 +42,16 @@ class SystemMode(Enum):
 class ModeManager:
     """Thread-safe holder for the current ``SystemMode``."""
 
-    def __init__(self, initial: SystemMode = SystemMode.WARMUP) -> None:
+    def __init__(self, initial: SystemMode = SystemMode.WARMUP, recorder=None) -> None:
         self._mode = initial
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
+        self._rec = recorder  # optional SessionRecorder for mode-transition logging
+
+    def set_recorder(self, recorder) -> None:
+        self._rec = recorder
+        if recorder is not None:
+            recorder.set_mode(self._mode.value)
 
     @property
     def mode(self) -> SystemMode:
@@ -60,6 +66,8 @@ class ModeManager:
             self._mode = new
             self._cond.notify_all()
         logger.info(f"[Mode] {old.value} → {new.value}")
+        if self._rec is not None:
+            self._rec.log_mode(old.value, new.value)
 
     def wait_for(self, target: SystemMode, timeout: Optional[float] = None) -> bool:
         """Block until the manager reaches ``target``. Returns False on timeout."""
@@ -192,7 +200,7 @@ def await_ready(
 #  ORDERED SHUTDOWN
 # ═══════════════════════════════════════════════════════════════════
 
-def shutdown(*, button, services, nav, gps, voice, modes: ModeManager) -> None:
+def shutdown(*, button, services, nav, gps, voice, modes: ModeManager, recorder=None) -> None:
     """
     Stop everything in dependency order:
 
@@ -250,5 +258,12 @@ def shutdown(*, button, services, nav, gps, voice, modes: ModeManager) -> None:
         gps.stop()
     except Exception:  # noqa: BLE001
         logger.exception("[Lifecycle] gps.stop failed")
+
+    # 7. Flush the field-test recorder and write the final summary.
+    if recorder is not None:
+        try:
+            recorder.finalize()
+        except Exception:  # noqa: BLE001
+            logger.exception("[Lifecycle] recorder.finalize failed")
 
     logger.info("[Lifecycle] Shutdown complete.")

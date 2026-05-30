@@ -68,6 +68,7 @@ class VoiceCommandHandler:
         voice,           # VoicePolicy
         modes,           # ModeManager
         stop_event,      # threading.Event
+        recorder=None,   # SessionRecorder or None
     ):
         self._config = config
         self._nav = nav
@@ -76,6 +77,8 @@ class VoiceCommandHandler:
         self._voice = voice
         self._modes = modes
         self._stop = stop_event
+        from main.session_recorder import NullRecorder
+        self._rec = recorder or NullRecorder()  # field-test black-box recorder
 
     def set_stt(self, stt):
         # Single-reference attribute write; safe without a lock in CPython.
@@ -108,6 +111,7 @@ class VoiceCommandHandler:
         text = self._get_text_input()
         if not text:
             self._voice.say_prompt("Anlayamadim, tekrar deneyin.")
+            self._rec.log_command("", intent=None, action="not_recognized")
             return
 
         # -- Classify intent ------------------------------------------------
@@ -120,6 +124,8 @@ class VoiceCommandHandler:
             self._handle_system_command(text)
         else:
             self._voice.say_prompt("Anlasildi.")
+
+        self._rec.log_command(text, intent=intent, action=intent)
 
     # -- Text input (STT vs keyboard bypass) --------------------------------
 

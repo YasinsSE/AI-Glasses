@@ -53,47 +53,64 @@ class VoicePolicy:
         # event instead of polling so it wakes the instant TTS finishes.
         self._idle_event = threading.Event()
         self._idle_event.set()
+        from main.session_recorder import NullRecorder
+        self._rec = NullRecorder()  # field-test recorder; replaced via set_recorder
+
+    def set_recorder(self, recorder) -> None:
+        """Attach the field-test recorder so every utterance is logged."""
+        self._rec = recorder
 
     # ── High-level semantic methods ──────────────────────────────
 
     def announce_boot(self) -> None:
         self._priority_speak("ALAS sistemi hazırlanıyor.")
+        self._rec.log_speak("announce", "ALAS sistemi hazırlanıyor.", True)
 
     def announce_ready(self) -> None:
         self._priority_speak("Sistem hazır. Butona basarak komut verebilirsiniz.")
+        self._rec.log_speak("announce", "Sistem hazır. Butona basarak komut verebilirsiniz.", True)
 
     def announce_shutdown(self) -> None:
         self._priority_speak("Sistem kapatılıyor, iyi günler.")
+        self._rec.log_speak("announce", "Sistem kapatılıyor, iyi günler.", True)
 
     def announce_sleep(self) -> None:
         self._priority_speak("Uyku moduna geçiliyor.")
+        self._rec.log_speak("announce", "Uyku moduna geçiliyor.", True)
 
     def announce_wake(self) -> None:
         self._priority_speak("Sistem aktif.")
+        self._rec.log_speak("announce", "Sistem aktif.", True)
 
     def emergency(self, text: str) -> None:
         self._priority_speak(text)
+        self._rec.log_speak("emergency", text, True)
 
     def say_nav(self, text: str) -> None:
         """Blocking nav instruction. Sets active gate AND post-utterance window."""
         self._priority_speak(text)
         with self._lock:
             self._suppress_obstacles_until = time.monotonic() + self._cfg.voice.post_nav_silence_sec
+        self._rec.log_speak("nav", text, True)
 
     def say_progress(self, text: str) -> None:
         """Non-blocking distance announcement. No gates. No silence window."""
         speak(text)
+        self._rec.log_speak("progress", text, True)
 
     def say_prompt(self, text: str) -> None:
         """Voice UI prompt (e.g. 'Sizi dinliyorum'). Blocking, no silence window."""
         self._priority_speak(text)
+        self._rec.log_speak("prompt", text, True)
 
     def say_obstacle(self, text: str) -> None:
         """Non-blocking obstacle alert. Suppressed during the post-nav silence window."""
         with self._lock:
             if time.monotonic() < self._suppress_obstacles_until:
+                self._rec.log_speak("obstacle", text, False, reason="post_nav_silence")
                 return
         speak(text)
+        self._rec.log_speak("obstacle", text, True)
 
     # ── Polled by services ───────────────────────────────────────
 
