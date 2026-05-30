@@ -73,7 +73,7 @@ class PerceptionService(threading.Thread):
     # ── Camera helpers (private) ─────────────────────────────────
 
     def _open_camera(self) -> bool:
-        import cv2  # Local import keeps cv2 out of pure unit tests.
+        import cv2
 
         cap = cv2.VideoCapture(self._config.ai.camera_index)
         # Capture directly at the model's input resolution to skip one resize.

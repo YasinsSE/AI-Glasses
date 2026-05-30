@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """ALAS — AI-Based Smart Glasses Main Loop.
 
-Thin orchestrator. Reads as a recipe; every step is one factory or
-constructor call followed by ``start()``. Each subsystem owns its own
-implementation:
+Every step is one factory or constructor call followed by ``start()``
+Each subsystem owns its own implementation:
 
     Perception      -> ai/perception_service.py
     Navigation      -> navigation/navigation_service.py
@@ -17,9 +16,11 @@ implementation:
 
 Run on Jetson Nano:
     cd src && python -m main.alas_main --model models/segmentation/alas_engine.trt
+    cd src && python -m main.alas_main --model models/segmentation/alas_engine.trt --record
 
 Desktop test (no GPIO / GPS / camera / microphone):
     cd src && python -m main.alas_main --mock --no-camera --bypass-stt --bypass-warmup
+    cd src && python -m main.alas_main --mock --no-camera --bypass-stt --bypass-warmup --record
 """
 
 import os
@@ -71,7 +72,7 @@ def main():
     nav = NavigationSystem(config.osm_map_path, config.nav)
 
     # 5. Speech recognition engine — loaded on a background thread so the
-    #    boot announcement (and nav warmup) are not blocked by Vosk model load.
+    #    boot announcement (and nav warmup)
     # VFH local planner — image-space escape routing over the segmentation
     # mask. None disables the override and PerceptionService falls back to
     # plain path_guidance.

@@ -37,7 +37,7 @@ def _resolve(path: str) -> str:
 class RecorderConfig:
     """Tunables for the field-test black-box recorder (see session_recorder.py)."""
     overlay_jpeg_quality: int = 65       # cv2 JPEG quality for saved overlays (lower = smaller/faster).
-    frame_min_interval_s: float = 1.5    # Minimum gap between saved overlay frames.
+    frame_min_interval_s: float = 2.0    # Minimum gap between saved overlay frames.
     telemetry_interval_s: float = 5.0    # SoC temperature / load sampling period.
     checkpoint_interval_s: float = 30.0  # Rolling summary_partial.md rewrite period.
     queue_maxsize: int = 200             # Bounded queue; full -> drop (OOM protection).

@@ -1,9 +1,6 @@
 """
 ALAS Lifecycle — system modes, signal handling, and ordered shutdown.
 =====================================================================
-The main loop should not own any of this. Put it here so ``alas_main.py``
-reads as a recipe.
-
 Three responsibilities:
     1. ``SystemMode`` / ``ModeManager`` — the WARMUP/ACTIVE/SLEEP/SHUTDOWN
        state machine. Services poll ``modes.mode`` at the top of their loop
@@ -14,8 +11,6 @@ Three responsibilities:
        tear-down sequences. The shutdown order is *load-bearing* and must
        not be reordered without thinking.
 """
-
-#from __future__ import annotations
 
 import logging
 import signal
