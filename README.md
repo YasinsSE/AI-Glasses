@@ -4,6 +4,8 @@ ALAS is a wearable edge-AI system designed to assist visually impaired individua
 
 The system integrates an RGB camera, lightweight semantic perception via U-Net, OSM-based offline navigation, and a voice I/O interface, all running on an NVIDIA Jetson Nano embedded compute unit.
 
+>*📌 **Note on Active Development:** ALAS is a dynamic, continuously evolving project. Because our architecture and hardware are frequently optimized, some details below may occasionally contain legacy information while we sync the documentation.*
+
 ---
 
 ## Problem Definition
@@ -25,12 +27,12 @@ The physical foundation of the device, centered on the **NVIDIA Jetson Nano** fo
 | Component | Role |
 |---|---|
 | NVIDIA Jetson Nano | Main compute unit — CUDA inference, sensor orchestration |
-| RGB Camera (IMX219) | Synchronized color and depth frame acquisition |
+| RGB Camera (IMX219) | Real-time visual frame acquisition |
 | NEO-7M GPS Module | Outdoor localization via UART/NMEA |
 | IMU (6-DOF) | Motion estimation and orientation tracking |
 | Microphone + Speaker | Primary human-machine interface (STT/TTS) |
 | Push Button | Controlled STT activation |
-| Battery + Power Module | Portable, self-contained operation |
+| Battery + Power Module | Portable, self-contained LiPo operation |
 
 ### 2. AI & Perception Layer
 
@@ -39,7 +41,7 @@ Transforms raw sensor data into actionable environmental intelligence.
 - **Image Preprocessing:** RGB frame resizing, normalization, and noise filtering targeting ≤20 ms preprocessing latency
 - **Semantic Perception:** U-Net-based object detection and scene segmentation, exported to ONNX and executed via ONNX Runtime with CUDA acceleration on the Jetson Nano
 - **Obstacle Classification:** Detected objects are mapped to five functional risk groups — walkable surface, vehicle road, collision obstacle, fall hazard, dynamic hazard — each triggering a different audio response
-- **Depth Fusion:** Depth channel from the RGB-D camera is fused with segmentation output to estimate obstacle distance and severity; warnings are prioritized by proximity (critical threshold: ≤2 m)
+- **Inverse Perspective Mapping (IPM):** Instead of relying on heavy depth sensors, the system uses the camera's fixed mounting geometry (height, tilt, FOV) to dynamically estimate obstacle distances directly from the 2D segmentation mask (`ai.geometry`)
 - **Sensor Fusion:** GPS and IMU data are combined to maintain robust outdoor localization
 
 ### 3. Interaction & Navigation Layer
@@ -48,11 +50,21 @@ Converts perception outputs into safe, understandable guidance.
 
 - **Offline Navigation:** Pre-processed OpenStreetMap (OSM) data loaded from local storage; route planning via A\* pathfinding on pedestrian graph networks
 - **GPS Localization:** User position is continuously mapped to the nearest OSM node; route deviation is detected and triggers immediate recalculation
+- **Local Avoidance (VFH):** A Vector Field Histogram logic translates the immediate segmented scene into angular avoidance sectors, guiding the user around localized blockages
 - **TTS (Text-to-Speech):** All navigation instructions, obstacle warnings, and system events are delivered as speech — fully on-device, no cloud dependency
 - **STT (Speech-to-Text):** Button-activated voice command recognition for commands such as `"nearest pharmacy"`, `"cancel route"`, `"status"` — processed locally
 - **Operating Modes:** System transitions between Standby, Environment Awareness, Navigation, Obstacle Avoidance, and Error/Recovery modes based on sensor state and user input
 
 The final objective is a portable, locally operating assistive device capable of perceiving the environment, interpreting scene structure, and guiding the user safely through audio feedback.
+
+## Field-Test Data System (Black-Box Recorder)
+
+To support robust outdoor testing on a screenless edge device, ALAS includes a built-in mission data recorder.
+- **Zero-Overhead Opt-In:** Disabled by default for end-users. When launched with `--record`, a background thread silently logs the session.
+- **System Telemetry:** Logs FPS, thermal throttling (SoC temps), GPS accuracy, and all suppressed/spoken voice decisions.
+- **Crash-Resilient:** Uses append-only JSONL, bounded queues for OOM protection, and pre-flight SD card space checks.
+
+---
 
 ## SLM Model Setup
 
