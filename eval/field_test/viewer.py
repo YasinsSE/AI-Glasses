@@ -92,10 +92,12 @@ h1 { padding: 18px 20px 6px; font-size: 1.4rem; color: #fff; }
 .card-time { font-size: .78rem; color: #888; margin-bottom: 6px; }
 .card-time strong { color: #ccc; }
 .card-perc { font-size: .8rem; margin-bottom: 8px; }
-.safe-badge  { display: inline-block; background: #2a5; color:#fff; border-radius:3px;
-               padding: 1px 6px; font-size:.72rem; margin-right:6px; }
-.unsafe-badge{ display: inline-block; background: #a33; color:#fff; border-radius:3px;
-               padding: 1px 6px; font-size:.72rem; margin-right:6px; }
+.safe-badge    { display: inline-block; background: #2a5; color:#fff; border-radius:3px;
+                 padding: 1px 6px; font-size:.72rem; margin-right:6px; }
+.caution-badge { display: inline-block; background: #a80; color:#fff; border-radius:3px;
+                 padding: 1px 6px; font-size:.72rem; margin-right:6px; }
+.unsafe-badge  { display: inline-block; background: #a33; color:#fff; border-radius:3px;
+                 padding: 1px 6px; font-size:.72rem; margin-right:6px; }
 .section-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
                  color: #666; margin: 8px 0 4px; }
 .speak-row { font-size: .82rem; padding: 3px 0; border-left: 3px solid #555;
@@ -128,9 +130,16 @@ def _perc_block(perc_ev):
     if not perc_ev:
         return ""
     w = perc_ev.get("walkable", 0)
-    safe = perc_ev.get("is_safe", True)
     hazard = perc_ev.get("hazard") or "—"
-    badge = '<span class="safe-badge">SAFE</span>' if safe else '<span class="unsafe-badge">UNSAFE</span>'
+    sl = perc_ev.get("safety_level")
+    if sl is None:
+        sl = 0 if perc_ev.get("is_safe") else 2
+    if sl == 0:
+        badge = '<span class="safe-badge">SAFE</span>'
+    elif sl == 1:
+        badge = '<span class="caution-badge">CAUTION</span>'
+    else:
+        badge = '<span class="unsafe-badge">UNSAFE</span>'
     return (f'<div class="card-perc">{badge} '
             f'walkable: <strong>{w:.1%}</strong> &nbsp; hazard: <strong>{_esc(hazard)}</strong></div>')
 

@@ -100,6 +100,15 @@ WALKABLE_GATED_CLASSES = {ClassID.COLLISION_OBSTACLE, ClassID.FALL_HAZARD}
 VERY_CLOSE_M = 2.0
 NEARBY_M = 5.0
 
+# Safety-level thresholds for vehicle classification.
+# A vehicle only contributes UNSAFE if it has significant presence in
+# the bottom half of the frame (i.e. close/ground-level) or covers a
+# large portion of the frame. Otherwise it is CAUTION or ignored.
+VEHICLE_UNSAFE_BOTTOM_RATIO = 0.25   # ≥25% of vehicle pixels in bottom half → unsafe
+VEHICLE_UNSAFE_FRAME_RATIO  = 0.12   # vehicle ≥12% of frame → unsafe regardless
+VEHICLE_SAFE_BOTTOM_RATIO   = 0.10   # <10% in bottom half AND small → safe
+VEHICLE_SAFE_FRAME_RATIO    = 0.06   # <6% of frame → eligible for safe
+
 
 # ═══════════════════════════════════════════════════════════════════
 #  DATA CLASSES — pipeline output
@@ -114,22 +123,24 @@ class ZoneInfo:
     dominant_zone: str           # "left" | "center" | "right"
     zone_ratios: dict = field(default_factory=dict)
     walkable_overlap: float = 1.0
-        # Fraction of this class's pixels that overlap the (dilated) walkable
-        # surface. Only meaningful for classes in WALKABLE_GATED_CLASSES;
-        # defaults to 1.0 so non-gated classes always pass the gate.
     estimated_distance_m: Optional[float] = None
-        # Ground-plane projected distance to the bottom-most pixel of the
-        # blob, in metres. None when no CameraGeometry was provided or when
-        # the bottom pixel projects above the horizon.
+    bottom_half_ratio: float = 0.0  # fraction of class pixels in the bottom half of frame
+
+
+# Safety levels — see _compute_safety_level() for rules.
+SAFETY_SAFE    = 0  # path clear, no blocking hazard
+SAFETY_CAUTION = 1  # hazard visible but off-path (e.g. parked car on road)
+SAFETY_UNSAFE  = 2  # hazard blocking or very close to walkable path
 
 
 @dataclass
 class SceneAnalysis:
     """Full scene understanding result for a single frame."""
-    walkable_ratio: float        # how much of the frame is walkable
-    zones: list                  # per-class breakdowns (non-zero only)
-    is_safe: bool                # True if no high-priority hazards
-    dominant_hazard: Optional[str]  # name of the biggest threat, or None
+    walkable_ratio: float
+    zones: list
+    is_safe: bool               # True only when safety_level == SAFETY_SAFE
+    dominant_hazard: Optional[str]
+    safety_level: int = SAFETY_SAFE  # SAFETY_SAFE / CAUTION / UNSAFE
 
 
 @dataclass
@@ -500,6 +511,8 @@ def analyse_scene(
                 bottom_y = int(h - 1 - np.argmax(row_has[::-1]))
                 distance_m = pixel_to_ground_distance(bottom_y, h, camera_geom)
 
+        bottom_half_ratio = b_total / px_count if px_count > 0 else 0.0
+
         zones.append(ZoneInfo(
             class_id=cid_int,
             class_name=CLASS_NAMES[cid],
@@ -508,6 +521,7 @@ def analyse_scene(
             zone_ratios=zone_ratios,
             walkable_overlap=overlap,
             estimated_distance_m=distance_m,
+            bottom_half_ratio=bottom_half_ratio,
         ))
 
         cfg = CLASS_ALERT_CONFIG[cid]
@@ -515,14 +529,69 @@ def analyse_scene(
             max_hazard_priority = cfg["priority"]
             dominant_hazard = CLASS_NAMES[cid]
 
-    is_safe = max_hazard_priority < 3
+    safety_level = _compute_safety_level(zones, walkable_ratio)
 
     return SceneAnalysis(
         walkable_ratio=walkable_ratio,
         zones=zones,
-        is_safe=is_safe,
+        is_safe=(safety_level == SAFETY_SAFE),
         dominant_hazard=dominant_hazard,
+        safety_level=safety_level,
     )
+
+
+def _compute_safety_level(zones: list, walkable_ratio: float) -> int:
+    """Compute 3-level safety from per-class zone data.
+
+    SAFE    — no hazard blocking the walkable path.
+    CAUTION — hazard visible but off-path (e.g. parked car on road side).
+    UNSAFE  — hazard blocking or very close to path.
+
+    Vehicles are handled with position-aware logic: a small car visible only
+    in the top part of the frame (far away, on the road) is SAFE. The same
+    car filling the bottom half and close to the sidewalk is UNSAFE.
+    """
+    if walkable_ratio < 0.03:
+        return SAFETY_UNSAFE
+
+    level = SAFETY_SAFE
+
+    for zone in zones:
+        cid = ClassID(zone.class_id)
+        cfg = CLASS_ALERT_CONFIG[cid]
+        ratio = zone.pixel_ratio
+
+        if cfg["priority"] == 0 or ratio < MIN_ALERT_RATIO:
+            continue
+
+        if cid == ClassID.VEHICLE:
+            bh = zone.bottom_half_ratio
+            if bh < VEHICLE_SAFE_BOTTOM_RATIO and ratio < VEHICLE_SAFE_FRAME_RATIO:
+                pass  # vehicle only in upper frame, small → safe
+            elif bh >= VEHICLE_UNSAFE_BOTTOM_RATIO or ratio >= VEHICLE_UNSAFE_FRAME_RATIO:
+                level = max(level, SAFETY_UNSAFE)
+            else:
+                level = max(level, SAFETY_CAUTION)
+
+        elif cid == ClassID.VEHICLE_ROAD:
+            level = max(level, SAFETY_CAUTION)
+
+        elif cid in WALKABLE_GATED_CLASSES:
+            # Use same gate as alert generation
+            if (walkable_ratio < MIN_WALKABLE_RATIO_FOR_GATING
+                    or zone.walkable_overlap >= MIN_WALKABLE_OVERLAP):
+                level = max(level, SAFETY_UNSAFE)
+
+        elif cid == ClassID.DYNAMIC_HAZARD:
+            if zone.dominant_zone == "center" or ratio > VERY_CLOSE_RATIO:
+                level = max(level, SAFETY_UNSAFE)
+            else:
+                level = max(level, SAFETY_CAUTION)
+
+        elif cfg["priority"] >= 3:
+            level = max(level, SAFETY_UNSAFE)
+
+    return level
 
 
 def generate_alerts(

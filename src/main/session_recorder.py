@@ -176,6 +176,7 @@ class SessionRecorder:
             "type": "perception",
             "walkable": round(scene.walkable_ratio, 3),
             "is_safe": scene.is_safe,
+            "safety_level": getattr(scene, "safety_level", None),
             "hazard": scene.dominant_hazard,
             "alert": ({"class": int(top.class_id), "text": top.text, "priority": top.priority}
                       if top else None),
@@ -482,8 +483,12 @@ def build_summary(events: list, title: str = "ALAS Field Test Report",
             lines.append(f"- FPS: avg **{_avg(fps):.1f}**, min **{min(fps):.1f}**")
         if infs:
             lines.append(f"- Inference ms: avg **{_avg(infs):.0f}**, p95 **{_pct(infs, 95):.0f}**")
-        unsafe = sum(1 for e in perception if e.get("is_safe") is False)
-        lines.append(f"- Frames flagged unsafe (a hazard present): **{unsafe}**")
+        n_safe    = sum(1 for e in perception if e.get("safety_level", None) == 0
+                        or (e.get("safety_level") is None and e.get("is_safe") is True))
+        n_caution = sum(1 for e in perception if e.get("safety_level") == 1)
+        n_unsafe  = sum(1 for e in perception if e.get("safety_level", 2) == 2
+                        and e.get("is_safe") is not True)
+        lines.append(f"- Safety: safe **{n_safe}** | caution **{n_caution}** | unsafe **{n_unsafe}**")
         lines.append("")
 
     # Thermal

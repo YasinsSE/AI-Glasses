@@ -10,7 +10,7 @@ import time
 from typing import Optional
 
 from ai.geometry import CameraGeometry
-from ai.perception import Alert, ClassID, PerceptionPipeline
+from ai.perception import Alert, ClassID, PerceptionPipeline, SAFETY_SAFE, SAFETY_CAUTION, SAFETY_UNSAFE
 from main.config import ALASConfig
 from main.lifecycle import ModeManager, SystemMode
 from navigation.local_planner import VFHPlanner
@@ -58,12 +58,11 @@ class PerceptionService(threading.Thread):
         self._last_vfh: Optional[tuple] = None  # (text, monotonic timestamp)
         # Global minimum gap between any two obstacle speaks.
         self._last_obstacle_speak_at: float = 0.0
-        # Last scene state (hazard_type, walkable_bucket). Used to detect
-        # whether the scene has meaningfully changed between frames.
+        # Last scene state (hazard_type, walkable_bucket, safety_level).
         self._last_hazard_state: Optional[tuple] = None
-        # Tracks safe↔unsafe transitions for the "Yol açık" announcement.
+        # Tracks safety-level transitions for "Yol açık" announcement.
         self._last_safe_announce_at: float = -999.0
-        self._prev_scene_safe: Optional[bool] = None
+        self._prev_safety_level: int = -1  # -1 = unknown (first frame)
         self.model_ready = threading.Event()
 
     # ── Camera helpers (private) ─────────────────────────────────
@@ -316,11 +315,12 @@ class PerceptionService(threading.Thread):
         else:
             message = None
 
+        safety_level = getattr(result.scene, "safety_level", SAFETY_UNSAFE)
         spoke = False
 
-        # ── Safe scene: "Yol açık" instead of obstacle alerts ────────────
-        if result.scene.is_safe:
-            just_became_safe = (self._prev_scene_safe is False)
+        # ── SAFE: "Yol açık" on transition, then periodic reminder ──────────
+        if safety_level == SAFETY_SAFE:
+            just_became_safe = self._prev_safety_level not in (SAFETY_SAFE, -1)
             interval_expired = (
                 now - self._last_safe_announce_at
                 >= self._config.ai.safe_announce_interval_sec
@@ -331,28 +331,32 @@ class PerceptionService(threading.Thread):
                 self._last_spoken = (safe_msg, now)
                 self._last_safe_announce_at = now
                 spoke = True
-            self._prev_scene_safe = True
+            self._prev_safety_level = SAFETY_SAFE
             self._rec.log_perception(result, chosen=safe_msg if spoke else None)
             if spoke and frame is not None:
                 self._rec.maybe_save_overlay(frame, result.mask, "safe", info={
                     "walkable": result.scene.walkable_ratio,
-                    "hazard": None,
                 })
             return
 
-        self._prev_scene_safe = False
+        self._prev_safety_level = safety_level
 
-        # ── Unsafe scene: state-change aware interval ─────────────────────────
-        # Coarse walkable bucket (0=blocked, 1=very narrow, 2=narrow, 3=clear).
+        # ── CAUTION / UNSAFE: state-change aware interval ────────────────────
+        # State key includes safety_level so caution→unsafe triggers a new speak.
         w = result.scene.walkable_ratio
         w_bucket = 0 if w < 0.03 else (1 if w < 0.10 else (2 if w < 0.25 else 3))
-        current_state = (result.scene.dominant_hazard, w_bucket)
+        current_state = (result.scene.dominant_hazard, w_bucket, safety_level)
         state_changed = current_state != self._last_hazard_state
 
-        min_interval = (
-            self._config.ai.min_obstacle_interval_sec if state_changed
-            else self._config.ai.min_obstacle_repeat_sec
-        )
+        if safety_level == SAFETY_CAUTION:
+            # Caution: hazard off-path, always use long interval
+            min_interval = self._config.ai.min_obstacle_repeat_sec
+        else:
+            # Unsafe: short interval on state change, long when scene unchanged
+            min_interval = (
+                self._config.ai.min_obstacle_interval_sec if state_changed
+                else self._config.ai.min_obstacle_repeat_sec
+            )
         interval_ok = (now - self._last_obstacle_speak_at) >= min_interval
 
         if interval_ok and message and self._should_speak(message, now):
@@ -362,27 +366,20 @@ class PerceptionService(threading.Thread):
             self._last_hazard_state = current_state
             spoke = True
             if top_alert is not None and self._pipeline is not None:
-                # Cooldown is consumed only by speech that actually reached
-                # the user, never by a candidate that lost to dedupe.
                 self._pipeline.mark_alert_spoken(top_alert.class_id)
 
-        # Field-test recorder: log every frame's outcome, and save an annotated
-        # overlay only when we actually warned the user (throttled in the recorder).
         self._rec.log_perception(result, chosen=message if spoke else None)
         if spoke and frame is not None:
             tag = (result.scene.dominant_hazard or "alert").replace(" ", "_")
             self._rec.maybe_save_overlay(frame, result.mask, tag, info={
                 "walkable": result.scene.walkable_ratio,
-                "hazard": result.scene.dominant_hazard,
             })
 
-        if not result.scene.is_safe:
+        if safety_level >= SAFETY_CAUTION:
             logger.debug(
-                "[Perception] Hazard: %s | walkable: %.0f%% | "
-                "inf: %.0fms total: %.0fms",
-                result.scene.dominant_hazard,
-                result.scene.walkable_ratio * 100.0,
-                result.inference_ms, result.total_ms,
+                "[Perception] level=%d hazard=%s walkable=%.0f%% inf=%.0fms",
+                safety_level, result.scene.dominant_hazard,
+                result.scene.walkable_ratio * 100.0, result.inference_ms,
             )
 
     def _select_path_guidance(
