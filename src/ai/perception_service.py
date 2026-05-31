@@ -68,6 +68,11 @@ class PerceptionService(threading.Thread):
         self._last_spoken: Optional[tuple] = None
         self._last_path_guidance: Optional[tuple] = None
         self._last_vfh: Optional[tuple] = None  # (text, monotonic timestamp)
+        # Global minimum gap between any two obstacle speaks.
+        self._last_obstacle_speak_at: float = 0.0
+        # Tracks safe↔unsafe transitions for the "Yol açık" announcement.
+        self._last_safe_announce_at: float = -999.0
+        self._prev_scene_safe: Optional[bool] = None
         self.model_ready = threading.Event()
 
     # ── Camera helpers (private) ─────────────────────────────────
@@ -315,9 +320,42 @@ class PerceptionService(threading.Thread):
             message = None
 
         spoke = False
-        if message and self._should_speak(message, now):
+
+        # ── Safe scene: "Yol açık" instead of obstacle alerts ────────────
+        if result.scene.is_safe:
+            just_became_safe = (self._prev_scene_safe is False)
+            interval_expired = (
+                now - self._last_safe_announce_at
+                >= self._config.ai.safe_announce_interval_sec
+            )
+            safe_msg = "Yol açık, devam edebilirsiniz."
+            if just_became_safe or interval_expired:
+                self._voice.say_obstacle(safe_msg)
+                self._last_spoken = (safe_msg, now)
+                self._last_safe_announce_at = now
+                spoke = True
+            self._prev_scene_safe = True
+            self._rec.log_perception(result, chosen=safe_msg if spoke else None)
+            if spoke and frame is not None:
+                self._rec.maybe_save_overlay(frame, result.mask, "safe", info={
+                    "walkable": result.scene.walkable_ratio,
+                    "hazard": None,
+                    "spoken": safe_msg,
+                })
+            return
+
+        self._prev_scene_safe = False
+
+        # ── Unsafe scene: global minimum interval between any obstacle speak ──
+        interval_ok = (
+            now - self._last_obstacle_speak_at
+            >= self._config.ai.min_obstacle_interval_sec
+        )
+
+        if interval_ok and message and self._should_speak(message, now):
             self._voice.say_obstacle(message)
             self._last_spoken = (message, now)
+            self._last_obstacle_speak_at = now
             spoke = True
             if top_alert is not None and self._pipeline is not None:
                 # Cooldown is consumed only by speech that actually reached
@@ -329,7 +367,11 @@ class PerceptionService(threading.Thread):
         self._rec.log_perception(result, chosen=message if spoke else None)
         if spoke and frame is not None:
             tag = (result.scene.dominant_hazard or "alert").replace(" ", "_")
-            self._rec.maybe_save_overlay(frame, result.mask, tag)
+            self._rec.maybe_save_overlay(frame, result.mask, tag, info={
+                "walkable": result.scene.walkable_ratio,
+                "hazard": result.scene.dominant_hazard,
+                "spoken": message,
+            })
 
         if not result.scene.is_safe:
             logger.info(

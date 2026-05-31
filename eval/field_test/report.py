@@ -21,7 +21,7 @@ _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from main.session_recorder import build_summary, write_gpx
+from main.session_recorder import build_summary, write_gpx, _write_viewer
 
 
 def load_events(events_path: Path):
@@ -66,9 +66,14 @@ def main(argv=None) -> int:
     out_path = Path(args.out) if args.out else session_dir / "summary.md"
     out_path.write_text(summary, encoding="utf-8")
 
-    # Best-effort GPX regeneration too (harmless if there are no GPS fixes).
+    # Best-effort GPX and viewer regeneration (harmless on error).
     try:
         write_gpx(events, session_dir / "gps_track.gpx")
+    except Exception:
+        pass
+    try:
+        _write_viewer(events, session_dir)
+        print(f"[report] viewer.html written to {session_dir}")
     except Exception:
         pass
 

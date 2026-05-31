@@ -693,16 +693,66 @@ def render_overlay(
     frame_bgr: np.ndarray,
     mask: np.ndarray,
     alpha: float = 0.4,
+    info: Optional[dict] = None,
 ) -> np.ndarray:
-    """Blend segmentation colours onto the camera frame (for debugging/display)."""
+    """Blend segmentation colours onto the camera frame.
+
+    ``info`` dict (all keys optional):
+        t        – relative session time in seconds
+        walkable – walkable pixel ratio [0, 1]
+        hazard   – dominant hazard class name string
+        spoken   – TTS text spoken on this frame
+    """
     h, w = frame_bgr.shape[:2]
     mask_resized = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
 
-    overlay = np.zeros_like(frame_bgr)
+    color_layer = np.zeros_like(frame_bgr)
     for cid, color in CLASS_COLORS_BGR.items():
-        overlay[mask_resized == cid] = color
+        color_layer[mask_resized == int(cid)] = color
 
-    return cv2.addWeighted(frame_bgr, 1.0 - alpha, overlay, alpha, 0)
+    out = cv2.addWeighted(frame_bgr, 1.0 - alpha, color_layer, alpha, 0)
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    box_h, pad = 14, 3
+
+    # ── Legend: only classes present in this frame ───────────────
+    ly = pad
+    for cid in ClassID:
+        if not np.any(mask_resized == int(cid)):
+            continue
+        color = CLASS_COLORS_BGR[cid]
+        label = CLASS_NAMES[cid].replace("_", " ")
+        lx = pad
+        cv2.rectangle(out, (lx, ly), (lx + box_h, ly + box_h), color, -1)
+        cv2.rectangle(out, (lx, ly), (lx + box_h, ly + box_h), (0, 0, 0), 1)
+        (tw, _), _ = cv2.getTextSize(label, font, 0.38, 1)
+        tx, ty = lx + box_h + 3, ly + box_h - 3
+        cv2.putText(out, label, (tx + 1, ty + 1), font, 0.38, (0, 0, 0), 1, cv2.LINE_AA)
+        cv2.putText(out, label, (tx, ty), font, 0.38, (255, 255, 255), 1, cv2.LINE_AA)
+        ly += box_h + pad
+
+    # ── Info rows at the bottom ───────────────────────────────────
+    if info:
+        rows = []
+        if info.get("t") is not None:
+            rows.append(f"t+{info['t']:.0f}s")
+        if info.get("walkable") is not None:
+            rows.append(f"walkable {info['walkable']:.0%}")
+        if info.get("hazard"):
+            rows.append(f"hazard: {info['hazard'].replace('_', ' ')}")
+        if info.get("spoken"):
+            spoken = info["spoken"]
+            # Wrap long spoken text at ~55 chars
+            max_chars = 55
+            chunks = [spoken[i:i + max_chars] for i in range(0, len(spoken), max_chars)]
+            rows += [f"say: {chunks[0]}"] + [f"     {c}" for c in chunks[1:]]
+        row_h = 16
+        for i, row in enumerate(rows):
+            y = h - pad - (len(rows) - 1 - i) * row_h
+            cv2.putText(out, row, (pad + 1, y + 1), font, 0.42, (0, 0, 0), 2, cv2.LINE_AA)
+            cv2.putText(out, row, (pad, y), font, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
+
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════════

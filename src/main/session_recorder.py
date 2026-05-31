@@ -101,7 +101,7 @@ class NullRecorder:
     def log_gps(self, lat, lon, age_s, sats, hdop, status, utc=None) -> None: ...
     def log_command(self, text, intent=None, confidence=None, action=None) -> None: ...
     def note_gps_utc(self, utc_dt, captured_mono) -> None: ...
-    def maybe_save_overlay(self, frame_bgr, mask, tag) -> None: ...
+    def maybe_save_overlay(self, frame_bgr, mask, tag, info=None) -> None: ...
     def set_mode(self, mode) -> None: ...
     def finalize(self) -> None: ...
 
@@ -161,7 +161,10 @@ class SessionRecorder:
 
     def _emit(self, ev: dict) -> None:
         ev.setdefault("t", self._rel())
-        ev.setdefault("wall", datetime.now(timezone.utc).isoformat())
+        # Store local time (with tz offset) so the wall field is human-readable
+        # without a UTC conversion step. Jetson's local timezone is respected as
+        # long as the OS clock/TZ is correct.
+        ev.setdefault("wall", datetime.now().astimezone().isoformat())
         try:
             self._q.put_nowait(("event", ev))
         except queue.Full:
@@ -228,8 +231,12 @@ class SessionRecorder:
         self._emit({"type": "clock_sync", "t": rel, "gps_utc": utc_dt.isoformat()})
         logger.info("[Recorder] Clock anchored to GPS UTC %s", utc_dt.isoformat())
 
-    def maybe_save_overlay(self, frame_bgr, mask, tag) -> None:
-        """Queue an annotated overlay for saving, throttled and disk-aware."""
+    def maybe_save_overlay(self, frame_bgr, mask, tag, info=None) -> None:
+        """Queue an annotated overlay for saving, throttled and disk-aware.
+
+        ``info`` is an optional dict forwarded to ``render_overlay`` for
+        on-frame annotations: walkable, hazard, spoken, t.
+        """
         if frame_bgr is None or mask is None or self._frames_disabled:
             return
         now = time.monotonic()
@@ -239,9 +246,11 @@ class SessionRecorder:
         self._frame_seq += 1
         seq = self._frame_seq
         rel_name = f"frames/f_{seq:05d}_{tag}.jpg"
+        if info is not None:
+            info.setdefault("t", self._rel())
         self._emit({"type": "frame", "file": rel_name, "tag": tag})
         try:
-            self._q.put_nowait(("frame", (seq, tag, frame_bgr, mask)))
+            self._q.put_nowait(("frame", (seq, tag, frame_bgr, mask, info)))
         except queue.Full:
             with self._lock:
                 self._dropped += 1
@@ -269,8 +278,8 @@ class SessionRecorder:
     def _write_frame(self, payload) -> None:
         import cv2  # local import: event-only sessions never need OpenCV
         from ai.perception import render_overlay
-        seq, tag, frame_bgr, mask = payload
-        overlay = render_overlay(frame_bgr, mask)
+        seq, tag, frame_bgr, mask, info = payload
+        overlay = render_overlay(frame_bgr, mask, info=info)
         path = self.frames_dir / f"f_{seq:05d}_{tag}.jpg"
         cv2.imwrite(str(path), overlay, [cv2.IMWRITE_JPEG_QUALITY, self._rc.overlay_jpeg_quality])
 
@@ -370,6 +379,7 @@ class SessionRecorder:
             (self.session_dir / "summary.md").write_text(
                 build_summary(events, title="ALAS Field Test Report"), encoding="utf-8")
             write_gpx(events, self.session_dir / "gps_track.gpx")
+            _write_viewer(events, self.session_dir)
         except Exception:
             logger.exception("[Recorder] finalize summary failed")
         try:
@@ -407,6 +417,24 @@ def build_recorder(config, voice=None):
                 logger.exception("[Recorder] low-disk announce failed")
         return NullRecorder()
     return SessionRecorder(config)
+
+
+# ── Viewer helper (calls eval/field_test/viewer.py) ─────────────────────────
+
+def _write_viewer(events: list, session_dir) -> None:
+    """Generate viewer.html alongside the summary. Best-effort; never raises."""
+    try:
+        import importlib.util, sys as _sys
+        _repo = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location(
+            "field_test_viewer", _repo / "eval" / "field_test" / "viewer.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        html = mod.build_html(Path(session_dir), events)
+        (Path(session_dir) / "viewer.html").write_text(html, encoding="utf-8")
+        logger.info("[Recorder] viewer.html written to %s", session_dir)
+    except Exception:
+        logger.debug("[Recorder] viewer.html generation skipped", exc_info=True)
 
 
 # ── Report building (shared with eval/field_test/report.py) ──────────────────
@@ -519,6 +547,19 @@ def build_summary(events: list, title: str = "ALAS Field Test Report",
         lines.append("## Navigation")
         lines.append("- Status counts: "
                      + ", ".join(f"{s}={c}" for s, c in sorted(statuses.items(), key=lambda x: -x[1])))
+        # Show waypoint-hit and step-change events with timestamps
+        notable = [n for n in navs if n.get("status") in (
+            "WAYPOINT_HIT", "OFF_ROUTE", "FINISHED", "STARTED", "REROUTING"
+        ) or n.get("step_text")]
+        if notable:
+            lines.append("- Notable events:")
+            for n in notable[:30]:
+                at = _abs_time(n, sync) or f"t+{n.get('t', 0):.0f}s"
+                dist = (f", {n['distance_to_next_m']:.0f}m to next"
+                        if n.get("distance_to_next_m") is not None else "")
+                step = (f" — {n['step_text']}"
+                        if n.get("step_text") else "")
+                lines.append(f"    - [{at}] {n.get('status')}{dist}{step}")
         lines.append("")
 
     # Voice input
