@@ -82,6 +82,7 @@ class ALASConfig:
 
     # ── Runtime flags (set by --mock / --no-camera / --bypass-*) ──
     mock: bool = False
+    mock_button: bool = False          # --mock-button: use Enter key instead of GPIO, GPS stays real.
     no_camera: bool = False
     bypass_stt: bool = False           # Skip STT/microphone — typed input via stdin.
     bypass_warmup: bool = False        # Skip the entire warmup phase.
@@ -97,6 +98,8 @@ class ALASConfig:
         parser.add_argument("--map",       default=None, help="Path to .osm map file")
         parser.add_argument("--gps-port",  default=None, help="GPS serial port")
         parser.add_argument("--mock",      action="store_true", help="Desktop test mode (no GPIO/GPS)")
+        parser.add_argument("--mock-button", action="store_true",
+                            help="Use Enter key instead of GPIO button; GPS and camera stay real")
         parser.add_argument("--no-camera", action="store_true", help="Disable perception thread")
         parser.add_argument("--bypass-stt", action="store_true",
                             help="Skip microphone — voice commands typed via keyboard")
@@ -124,6 +127,7 @@ class ALASConfig:
         if args.gps_port:
             config.gps.port = args.gps_port
         config.mock = args.mock
+        config.mock_button = args.mock_button
         config.no_camera = args.no_camera
         config.bypass_stt = args.bypass_stt
         config.bypass_warmup = args.bypass_warmup

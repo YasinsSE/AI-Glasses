@@ -104,7 +104,7 @@ def main():
         on_press=commands.handle_press,
         modes=modes,
         stop_event=stop_event,
-        mock=config.mock,
+        mock=config.mock or config.mock_button,
     )
 
     if perception is not None:
