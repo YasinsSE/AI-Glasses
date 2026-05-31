@@ -7,17 +7,17 @@ first run.
 First-time setup (run once after cloning the repository):
     1. Install portaudio (required by PyAudio) on macOS: brew install portaudio
     2. Install the libraries: pip install vosk pyaudio pyttsx3 mlx mlx-lm huggingface_hub
-    3. Log in to Hugging Face: python -c "from huggingface_hub import login; login()"
-    4. Download the fine-tuned SLM model: python -c "from huggingface_hub import snapshot_download; snapshot_download('Sirius95/ai-glasses-safetensor', local_dir='src/tts_stt/my_custom_slm/')"
+    3. Log in to Hugging Face: python3 -c "from huggingface_hub import login; login()"
+    4. Download the fine-tuned SLM model: python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Sirius95/ai-glasses-safetensor', local_dir='src/tts_stt/my_custom_slm/')"
     5. The Vosk Turkish model downloads automatically on first run.
 
 How to run (from the repository root):
-    python -m tts_stt.stt
+    python3 -m tts_stt.stt
 
 Optional — re-train the SLM model (from the repository root):
-    python eval/tts_stt/slmprepare.py
-    python -m mlx_lm lora --model Qwen/Qwen2.5-0.5B-Instruct --data outputs/eval/tts_stt --train --iters 500 --batch-size 4 --num-layers 8 --learning-rate 1e-4 --seed 42
-    python -m mlx_lm fuse --model Qwen/Qwen2.5-0.5B-Instruct --adapter-path adapters/ --save-path src/tts_stt/my_custom_slm/
+    python3 eval/tts_stt/slmprepare.py
+    python3 -m mlx_lm lora --model Qwen/Qwen2.5-0.5B-Instruct --data outputs/eval/tts_stt --train --iters 500 --batch-size 4 --num-layers 8 --learning-rate 1e-4 --seed 42
+    python3 -m mlx_lm fuse --model Qwen/Qwen2.5-0.5B-Instruct --adapter-path adapters/ --save-path src/tts_stt/my_custom_slm/
 """
 
 import json

@@ -1,34 +1,17 @@
-"""Field-test black-box recorder for ALAS.
+"""Session recorder for ALAS field tests (--record flag).
 
-A wearable with no screen needs a flight recorder: capture everything that
-happens during a walk to a session folder, then review it at home. The recorder
-is wired into the live system behind ``--record`` and writes to
-``outputs/field_tests/<timestamp>/``:
+Writes to outputs/field_tests/<timestamp>/:
+    events.jsonl        — append-only event log (one JSON per line)
+    frames/             — annotated overlay JPEGs on notable events
+    session.json        — run metadata
+    summary_partial.md  — rolling checkpoint
+    summary.md          — final report (on finalize)
+    gps_track.gpx       — GPS track
+    viewer.html         — per-frame HTML viewer
 
-    events.jsonl          append-only structured timeline (one JSON object/line)
-    frames/               annotated overlay JPEGs, saved only on notable events
-    session.json          run metadata (start, config, git commit, model)
-    summary_partial.md    rolling checkpoint (survives an unclean shutdown)
-    summary.md            final report (written by finalize())
-    gps_track.gpx         the walk, for mapping
-
-Design constraints (Jetson Nano on SD + LiPo):
-
-* **Never block the real-time threads.** Perception/navigation/audio only
-  enqueue; a single writer thread does all disk I/O and image encoding.
-* **Bounded queue + drop.** If the SD card throttles, the queue fills and items
-  are dropped (counted, reported) instead of growing until the kernel OOM-kills
-  the process.
-* **No real-time clock.** ``time.monotonic()`` (the ``t`` field) is the
-  authoritative clock; absolute wall time is anchored once from GPS satellite
-  UTC via a ``clock_sync`` event and reconstructed offline by report.py.
-* **Crash resilience.** ``events.jsonl`` is line-buffered (every completed line
-  survives a power cut) and a ``summary_partial.md`` checkpoint is rewritten
-  periodically, so an interrupted session still yields a usable summary.
-
-When ``--record`` is off, ``build_recorder`` returns a ``NullRecorder`` whose
-methods are no-ops, so the rest of the system carries no conditionals and pays
-zero overhead.
+All disk I/O runs on a background writer thread; real-time threads only
+enqueue events. Queue is bounded — drops on overflow instead of OOM.
+Without --record, build_recorder() returns NullRecorder (no-op).
 """
 
 import glob

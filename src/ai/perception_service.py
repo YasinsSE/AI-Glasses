@@ -1,19 +1,7 @@
-"""PerceptionService — camera capture + perception pipeline as a long-running thread.
+"""PerceptionService — camera capture and inference loop.
 
-Owns the camera lifecycle (open / read / release) and runs the
-``PerceptionPipeline`` at a controlled FPS, then routes alerts through the
-shared ``VoicePolicy``.
-
-Three gates control whether the loop body runs:
-
-    1. ``modes.mode == ACTIVE``        — skip everything in WARMUP / SLEEP.
-    2. ``voice.is_speaking_priority()`` — skip while a nav announcement plays.
-    3. ``voice.in_post_nav_silence()`` — also skip during the post-nav window
-       (obstacle alerts would be muted anyway, so save the inference cost).
-
-The cv2 lifecycle is intentionally inlined as private helpers rather than a
-separate ``CameraSource`` class — there is one consumer and the helper is
-twenty lines, so a stand-alone class would be premature abstraction.
+Runs PerceptionPipeline at a fixed FPS and routes alerts through VoicePolicy.
+Loop is gated on system mode, active TTS, and post-nav silence window.
 """
 
 import logging

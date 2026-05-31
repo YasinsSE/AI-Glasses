@@ -15,22 +15,22 @@ Each subsystem owns its own implementation:
     STT factory     -> tts_stt/__init__.py           (load_stt)
 
 Run on Jetson Nano:
-    python -m main.alas_main --model models/segmentation/alas_engine.trt
-    python -m main.alas_main --model models/segmentation/alas_engine.trt --record
+    python3 -m main.alas_main --model models/segmentation/alas_engine.trt
+    python3 -m main.alas_main --model models/segmentation/alas_engine.trt --record
 
 Field test
     python3 -m main.alas_main --model models/segmentation/alas_engine.trt --bypass-stt --record
 
 Desktop test (no GPIO / GPS / camera / microphone):
-    python -m main.alas_main --mock --no-camera --bypass-stt --bypass-warmup
-    python -m main.alas_main --mock --no-camera --bypass-stt --bypass-warmup --record
+    python3 -m main.alas_main --mock --no-camera --bypass-stt --bypass-warmup
+    python3 -m main.alas_main --mock --no-camera --bypass-stt --bypass-warmup --record
 """
 
 import os
 import sys
 import threading
 
-# Make sub-packages importable when invoked as ``python -m main.alas_main``.
+# Make sub-packages importable when invoked as ``python3 -m main.alas_main``.
 _SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)

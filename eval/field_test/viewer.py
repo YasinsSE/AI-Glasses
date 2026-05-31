@@ -12,8 +12,8 @@ Also generates a chronological "speak timeline" at the top so the reviewer
 can see how often the system was talking and jump to any spoken moment.
 
 How to run (from the repository root):
-    python eval/field_test/viewer.py outputs/field_tests/<timestamp>/
-    python eval/field_test/viewer.py outputs/field_tests/<timestamp>/ --out /tmp/viewer.html
+    python3 eval/field_test/viewer.py outputs/field_tests/<timestamp>/
+    python3 eval/field_test/viewer.py outputs/field_tests/<timestamp>/ --out /tmp/viewer.html
 """
 
 import argparse

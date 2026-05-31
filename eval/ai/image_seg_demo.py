@@ -5,9 +5,9 @@ Runs segmentation on one or more image files and displays the result. With
 outputs/eval/ai/segmentation_samples/.
 
 How to run (from the repository root):
-    python eval/ai/image_seg_demo.py --model models/segmentation/alas_engine.trt --images eval/ai/samples/test1.jpeg
-    python eval/ai/image_seg_demo.py --model models/segmentation/alas_model.onnx --images eval/ai/samples/test1.jpeg
-    python eval/ai/image_seg_demo.py --model models/segmentation/alas_engine.trt --images eval/ai/samples/test1.jpeg --save
+    python3 eval/ai/image_seg_demo.py --model models/segmentation/alas_engine.trt --images eval/ai/samples/test1.jpeg
+    python3 eval/ai/image_seg_demo.py --model models/segmentation/alas_model.onnx --images eval/ai/samples/test1.jpeg
+    python3 eval/ai/image_seg_demo.py --model models/segmentation/alas_engine.trt --images eval/ai/samples/test1.jpeg --save
 """
 
 import sys

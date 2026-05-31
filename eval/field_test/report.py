@@ -6,8 +6,8 @@ ran: it tolerates a truncated/garbage final line and produces the best report it
 can from whatever parsed.
 
 How to run (from the repository root):
-    python eval/field_test/report.py outputs/field_tests/<timestamp>/
-    python eval/field_test/report.py outputs/field_tests/<timestamp>/ --out /tmp/report.md
+    python3 eval/field_test/report.py outputs/field_tests/<timestamp>/
+    python3 eval/field_test/report.py outputs/field_tests/<timestamp>/ --out /tmp/report.md
 """
 
 import argparse

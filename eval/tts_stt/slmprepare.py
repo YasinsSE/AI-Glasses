@@ -7,7 +7,7 @@ into ChatML-formatted train/valid JSONL files for MLX LoRA fine-tuning.
     Outputs: outputs/eval/tts_stt/{train.jsonl, valid.jsonl}
 
 How to run (from the repository root):
-    python eval/tts_stt/slmprepare.py
+    python3 eval/tts_stt/slmprepare.py
 """
 
 import json

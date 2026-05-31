@@ -17,10 +17,10 @@ quit, 's' to save a snapshot. Snapshots are written under
 outputs/eval/navigation/local_planner/.
 
 How to run (from the repository root):
-    python eval/navigation/local_planner/vfh_demo.py --model models/segmentation/alas_engine.trt --image eval/ai/samples/test1.jpeg --save
-    python eval/navigation/local_planner/vfh_demo.py --model models/segmentation/alas_engine.trt --video walk.mp4
-    python eval/navigation/local_planner/vfh_demo.py --model models/segmentation/alas_engine.trt --camera 0
-    python eval/navigation/local_planner/vfh_demo.py --no-model --mask-image mask.png
+    python3 eval/navigation/local_planner/vfh_demo.py --model models/segmentation/alas_engine.trt --image eval/ai/samples/test1.jpeg --save
+    python3 eval/navigation/local_planner/vfh_demo.py --model models/segmentation/alas_engine.trt --video walk.mp4
+    python3 eval/navigation/local_planner/vfh_demo.py --model models/segmentation/alas_engine.trt --camera 0
+    python3 eval/navigation/local_planner/vfh_demo.py --no-model --mask-image mask.png
 """
 
 import argparse

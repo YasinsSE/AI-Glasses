@@ -1,34 +1,18 @@
 """
-VoicePolicy — central speech gate for ALAS.
-============================================
-The user's #1 complaint about the draft main loop was: "TTS keeps talking and
-disturbs me." This module is the single chokepoint that enforces TTS
-discipline.
+VoicePolicy — TTS gating for ALAS.
 
-Two orthogonal mechanisms:
+Single chokepoint for all speech output. Enforces:
+  - Active-utterance gate: skips perception inference while a nav/priority
+    utterance is playing.
+  - Post-nav silence window: mutes obstacle alerts for N seconds after
+    a navigation instruction finishes.
 
-    1. **Active-utterance gate** (`is_speaking_priority`): True only *while*
-       a high-priority utterance is being spoken. PerceptionService polls
-       this and skips inference entirely so it does not queue stale alerts
-       behind the live navigation announcement.
-
-    2. **Post-utterance silence window** (`_suppress_obstacles_until`):
-       After a navigation utterance finishes, obstacle alerts are silently
-       dropped for ``post_nav_silence_sec`` seconds. Perception still runs;
-       it just does not speak.
-
-Semantic methods:
-
-    - ``announce_*``  : boot/ready/sleep/wake announcements (priority, blocking)
-    - ``emergency``   : error / warmup-timeout / camera-fail (priority, blocking)
-    - ``say_nav``     : turn instructions (priority, blocking, sets silence window)
-    - ``say_progress``: distance pings (non-blocking, NO silence window)
-    - ``say_prompt``  : voice-UI prompts (priority, blocking, NO silence window)
-    - ``say_obstacle``: hazard alerts (non-blocking, suppressed during window)
-
-The lock is held only around state mutation, never across the (slow) call to
-``speak() / wait_until_done()``. Holding it across audio playback would
-deadlock perception.
+Methods:
+    announce_* / emergency  — priority, blocking
+    say_nav                 — priority, blocking; sets post-nav silence window
+    say_progress            — non-blocking, no silence window
+    say_prompt              — priority, blocking, no silence window
+    say_obstacle            — non-blocking, suppressed during silence window
 """
 
 import logging

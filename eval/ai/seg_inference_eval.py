@@ -5,9 +5,9 @@ save a single snapshot, 'r' to toggle the raw mask view. Snapshots are written
 under outputs/eval/ai/snapshots/.
 
 How to run (from the repository root):
-    python eval/ai/seg_inference_eval.py --model models/segmentation/alas_engine.trt --gstreamer
-    python eval/ai/seg_inference_eval.py --model models/segmentation/alas_engine.trt --gstreamer --fps 10
-    python eval/ai/seg_inference_eval.py --model models/segmentation/alas_model.onnx
+    python3 eval/ai/seg_inference_eval.py --model models/segmentation/alas_engine.trt --gstreamer
+    python3 eval/ai/seg_inference_eval.py --model models/segmentation/alas_engine.trt --gstreamer --fps 10
+    python3 eval/ai/seg_inference_eval.py --model models/segmentation/alas_model.onnx
 """
 
 import os

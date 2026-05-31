@@ -5,7 +5,7 @@ typed commands interactively. The prompt template is kept in Turkish on purpose:
 it must match the format the model saw during fine-tuning.
 
 How to run (from the repository root):
-    python eval/tts_stt/slmtester.py
+    python3 eval/tts_stt/slmtester.py
 """
 
 from pathlib import Path

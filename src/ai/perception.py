@@ -1,27 +1,12 @@
 """
 ALAS Perception Pipeline
-========================
-Camera frame → preprocess → TensorRT/ONNX inference → scene understanding → alerts.
 
-This module wraps the full perception chain into a single class that the main
-loop can call with one method: ``pipeline.process(frame_bgr)``.
-
-Pipeline stages:
-    1. Preprocess  : BGR → RGB → resize → float32 [0,1] → (1, H, W, 3)
-    2. Inference   : TensorRT or ONNX backend → raw logits
-    3. Postprocess : logits → argmax → class-ID mask (H, W)
-    4. Scene analysis : per-class pixel ratios + dominant zone (left/center/right)
-    5. Alert generation : priority-sorted TTS strings with cooldown
+Camera frame → TensorRT/ONNX inference → scene analysis → alerts.
 
 Usage:
     from ai.perception import PerceptionPipeline
-
     pipeline = PerceptionPipeline("models/segmentation/alas_engine.trt")
-
-    # In the camera loop:
     result = pipeline.process(frame_bgr)
-    for alert in result.alerts:
-        speak(alert)
 """
 
 import time

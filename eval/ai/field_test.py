@@ -8,9 +8,9 @@ Outputs (under outputs/eval/ai/field_tests/<timestamp>/):
     frames/     every Nth frame as JPEG (overlay + raw)
 
 How to run (from the repository root):
-    python eval/ai/field_test.py --model models/segmentation/alas_engine.trt --gstreamer
-    python eval/ai/field_test.py --model models/segmentation/alas_engine.trt --gstreamer --duration 300
-    python eval/ai/field_test.py --model models/segmentation/alas_model.onnx --duration 120
+    python3 eval/ai/field_test.py --model models/segmentation/alas_engine.trt --gstreamer
+    python3 eval/ai/field_test.py --model models/segmentation/alas_engine.trt --gstreamer --duration 300
+    python3 eval/ai/field_test.py --model models/segmentation/alas_model.onnx --duration 120
 """
 
 import os

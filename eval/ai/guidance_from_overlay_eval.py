@@ -11,10 +11,10 @@ Camera mode (PerceptionPipeline):
     inference on the camera feed and prints/draws guidance. Press 'q' to quit.
 
 How to run (from the repository root):
-    python eval/ai/guidance_from_overlay_eval.py outputs/eval/ai/segmentation_samples/result_test1_overlay.jpg
-    python eval/ai/guidance_from_overlay_eval.py outputs/eval/ai/segmentation_samples/result_test1_overlay.jpg --nav
-    python eval/ai/guidance_from_overlay_eval.py --camera --model models/segmentation/alas_engine.onnx
-    python eval/ai/guidance_from_overlay_eval.py --camera --model models/segmentation/alas_engine.onnx --camera-index 1
+    python3 eval/ai/guidance_from_overlay_eval.py outputs/eval/ai/segmentation_samples/result_test1_overlay.jpg
+    python3 eval/ai/guidance_from_overlay_eval.py outputs/eval/ai/segmentation_samples/result_test1_overlay.jpg --nav
+    python3 eval/ai/guidance_from_overlay_eval.py --camera --model models/segmentation/alas_engine.onnx
+    python3 eval/ai/guidance_from_overlay_eval.py --camera --model models/segmentation/alas_engine.onnx --camera-index 1
 """
 
 import argparse
@@ -337,9 +337,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples (run from the repository root):\n"
-            "  Image     : python eval/ai/guidance_from_overlay_eval.py overlay.png\n"
-            "  Image+nav : python eval/ai/guidance_from_overlay_eval.py overlay.png --nav\n"
-            "  Camera    : python eval/ai/guidance_from_overlay_eval.py --camera --model model.onnx\n"
+            "  Image     : python3 eval/ai/guidance_from_overlay_eval.py overlay.png\n"
+            "  Image+nav : python3 eval/ai/guidance_from_overlay_eval.py overlay.png --nav\n"
+            "  Camera    : python3 eval/ai/guidance_from_overlay_eval.py --camera --model model.onnx\n"
         ),
     )
 
