@@ -748,7 +748,7 @@ def render_overlay(
         cv2.putText(out, label, (tx, ty), font, 0.38, (255, 255, 255), 1, cv2.LINE_AA)
         ly += box_h + pad
 
-    # ── Info rows at the bottom ───────────────────────────────────
+    # ── Info rows at the bottom (ASCII-safe only — cv2.putText has no UTF-8) ─
     if info:
         rows = []
         if info.get("t") is not None:
@@ -757,12 +757,8 @@ def render_overlay(
             rows.append(f"walkable {info['walkable']:.0%}")
         if info.get("hazard"):
             rows.append(f"hazard: {info['hazard'].replace('_', ' ')}")
-        if info.get("spoken"):
-            spoken = info["spoken"]
-            # Wrap long spoken text at ~55 chars
-            max_chars = 55
-            chunks = [spoken[i:i + max_chars] for i in range(0, len(spoken), max_chars)]
-            rows += [f"say: {chunks[0]}"] + [f"     {c}" for c in chunks[1:]]
+        # spoken text is intentionally omitted — Turkish chars break cv2.putText
+        # and the viewer.html already shows the full spoken feedback per frame.
         row_h = 16
         for i, row in enumerate(rows):
             y = h - pad - (len(rows) - 1 - i) * row_h

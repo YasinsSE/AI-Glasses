@@ -99,6 +99,8 @@ class VoiceCommandHandler:
 
         # Only run STT in ACTIVE mode (skip during WARMUP).
         if self._modes.mode != SystemMode.ACTIVE:
+            print(f"[Button] Ignored — system not ready yet (mode={self._modes.mode}). "
+                  "Wait for 'Sistem hazir' then press Enter again.", flush=True)
             return
 
         # STT may still be loading on a background thread; refuse the press

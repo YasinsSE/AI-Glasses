@@ -258,7 +258,7 @@ class PerceptionService(threading.Thread):
             if frames_done >= _FPS_LOG_WINDOW:
                 now = time.monotonic()
                 achieved = frames_done / (now - window_start)
-                logger.info(
+                logger.debug(
                     "[Perception] sustained %.2f FPS (target %.1f)",
                     achieved, self._config.ai.perception_fps,
                 )
@@ -346,7 +346,6 @@ class PerceptionService(threading.Thread):
                 self._rec.maybe_save_overlay(frame, result.mask, "safe", info={
                     "walkable": result.scene.walkable_ratio,
                     "hazard": None,
-                    "spoken": safe_msg,
                 })
             return
 
@@ -376,11 +375,10 @@ class PerceptionService(threading.Thread):
             self._rec.maybe_save_overlay(frame, result.mask, tag, info={
                 "walkable": result.scene.walkable_ratio,
                 "hazard": result.scene.dominant_hazard,
-                "spoken": message,
             })
 
         if not result.scene.is_safe:
-            logger.info(
+            logger.debug(
                 "[Perception] Hazard: %s | walkable: %.0f%% | "
                 "inf: %.0fms total: %.0fms",
                 result.scene.dominant_hazard,
@@ -443,7 +441,7 @@ class PerceptionService(threading.Thread):
         if guidance is None:
             return None
 
-        logger.info(
+        logger.debug(
             "[Perception] VFH: action=%s sector=%d hist=%s",
             guidance.action.value, guidance.sector_index,
             ["%.2f" % h for h in guidance.histogram],
