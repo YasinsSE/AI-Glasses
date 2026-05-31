@@ -72,24 +72,62 @@ class PerceptionService(threading.Thread):
 
     # ── Camera helpers (private) ─────────────────────────────────
 
+    def _build_csi_pipeline(self) -> str:
+        """Argus/ISP pipeline for CSI sensors (IMX219).
+
+        We capture at a native sensor mode and let nvvidconv do the downscale on
+        the ISP, so the only data crossing into CPU/NumPy is already at model
+        input resolution in BGR. drop=true + max-buffers=1 keeps read() returning
+        the freshest frame — stale frames pile up while TTS blocks the loop.
+        """
+        ai = self._config.ai
+        return (
+            f"nvarguscamerasrc sensor-id={ai.camera_index} "
+            f"sensor-mode={ai.csi_sensor_mode} ! "
+            f"video/x-raw(memory:NVMM), width={ai.csi_capture_width}, "
+            f"height={ai.csi_capture_height}, format=(string)NV12, "
+            f"framerate=(fraction){ai.csi_framerate}/1 ! "
+            f"nvvidconv flip-method={ai.csi_flip_method} ! "
+            f"video/x-raw, width={ai.camera_width}, height={ai.camera_height}, "
+            f"format=(string)BGRx ! "
+            f"videoconvert ! video/x-raw, format=(string)BGR ! "
+            f"appsink drop=true max-buffers=1"
+        )
+
     def _open_camera(self) -> bool:
         import cv2
 
-        cap = cv2.VideoCapture(self._config.ai.camera_index)
-        # Capture directly at the model's input resolution to skip one resize.
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._config.ai.camera_width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._config.ai.camera_height)
-        # Buffersize=1 makes read() always return the freshest frame instead
-        # of whatever queued up while TTS was speaking.
+        ai = self._config.ai
+
+        # CSI sensors need the Argus pipeline; v4l2 (index) only serves USB UVC.
+        if ai.use_csi_camera:
+            pipeline = self._build_csi_pipeline()
+            cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+            if not cap.isOpened():
+                logger.error(
+                    "[Perception] Cannot open CSI camera via GStreamer. "
+                    "Check `gst-launch-1.0 nvarguscamerasrc` works standalone."
+                )
+                return False
+            logger.info(
+                "[Perception] CSI camera opened (sensor-id=%d) — capture %dx%d, "
+                "delivering %dx%d BGR",
+                ai.camera_index, ai.csi_capture_width, ai.csi_capture_height,
+                ai.camera_width, ai.camera_height,
+            )
+            self._cap = cap
+            return True
+
+        # --- USB UVC path (unchanged) -------------------------------------
+        cap = cv2.VideoCapture(ai.camera_index)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, ai.camera_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, ai.camera_height)
         try:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:
             pass
-        # MJPG fourcc relieves USB bandwidth pressure on Jetson Nano. Some
-        # CSI/GStreamer pipelines reject it — best-effort.
         try:
-            fourcc = cv2.VideoWriter_fourcc(*"MJPG")
-            cap.set(cv2.CAP_PROP_FOURCC, fourcc)
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         except Exception:
             pass
 
@@ -97,9 +135,6 @@ class PerceptionService(threading.Thread):
             logger.error("[Perception] Cannot open camera.")
             return False
 
-        # USB cams silently downgrade fourcc / resolution. Log what we
-        # actually got so a "slow FPS" report can be diagnosed without
-        # plugging in a monitor.
         try:
             actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -109,8 +144,7 @@ class PerceptionService(threading.Thread):
             ).strip()
             logger.info(
                 "[Perception] Camera negotiated: %dx%d @ fourcc=%r (requested %dx%d)",
-                actual_w, actual_h, fourcc,
-                self._config.ai.camera_width, self._config.ai.camera_height,
+                actual_w, actual_h, fourcc, ai.camera_width, ai.camera_height,
             )
         except Exception:
             logger.debug("[Perception] Could not read back camera settings.")

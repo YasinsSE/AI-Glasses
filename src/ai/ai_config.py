@@ -26,6 +26,20 @@ class AIConfig:
     camera_width: int = 512
     camera_height: int = 384
 
+    # CSI cameras (IMX219 / Raspberry Pi Cam) on Jetson are NOT reachable through
+    # the v4l2 path that cv2.VideoCapture(index) builds — they require the Argus
+    # ISP via an nvarguscamerasrc GStreamer pipeline. USB UVC cams use the index.
+    use_csi_camera: bool = True
+    # Native sensor capture resolution before hardware downscale to the model
+    # input. 1280x720 is a valid IMX219 sensor mode; nvvidconv scales it to
+    # camera_width/height on the ISP, so the CPU never touches a full-res frame.
+    csi_capture_width: int = 1280
+    csi_capture_height: int = 720
+    csi_framerate: int = 30
+    # 0=none, 2=180°. Flip if the glasses-mounted module is physically inverted.
+    csi_flip_method: int = 0
+    csi_sensor_mode: int = 4
+
     # Pedestrian motion is slow, so consecutive frames carry little new
     # information. Capping inference at ~2 FPS keeps the Jetson Nano cool and
     # avoids overwhelming the user with TTS alerts.

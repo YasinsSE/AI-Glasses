@@ -15,12 +15,15 @@ Each subsystem owns its own implementation:
     STT factory     -> tts_stt/__init__.py           (load_stt)
 
 Run on Jetson Nano:
-    cd src && python -m main.alas_main --model models/segmentation/alas_engine.trt
-    cd src && python -m main.alas_main --model models/segmentation/alas_engine.trt --record
+    python -m main.alas_main --model models/segmentation/alas_engine.trt
+    python -m main.alas_main --model models/segmentation/alas_engine.trt --record
+
+Field test
+    python3 -m main.alas_main --model models/segmentation/alas_engine.trt --bypass-stt --record
 
 Desktop test (no GPIO / GPS / camera / microphone):
-    cd src && python -m main.alas_main --mock --no-camera --bypass-stt --bypass-warmup
-    cd src && python -m main.alas_main --mock --no-camera --bypass-stt --bypass-warmup --record
+    python -m main.alas_main --mock --no-camera --bypass-stt --bypass-warmup
+    python -m main.alas_main --mock --no-camera --bypass-stt --bypass-warmup --record
 """
 
 import os
