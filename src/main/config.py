@@ -68,7 +68,6 @@ class ALASConfig:
 
     # ── Cross-cutting paths ──────────────────────────────────────
     osm_map_path: str = "navigation/router/map.osm"
-    log_dir: str = "src/logs"
 
     # ── Field-test recorder ──────────────────────────────────────
     rec: RecorderConfig = field(default_factory=RecorderConfig)
@@ -136,11 +135,9 @@ class ALASConfig:
         config.live = args.live
 
         # Anchor relative paths so the entry point can be invoked from any
-        # working directory. The OSM map lives under src/ (code-relative);
-        # models/, outputs/, and src/logs live at the repository root.
+        # working directory.
         config.osm_map_path = _resolve(config.osm_map_path)
         config.ai.model_path = _resolve_repo(config.ai.model_path)
-        config.log_dir = _resolve_repo(config.log_dir)
-        config.nav.log_dir = config.log_dir
         config.record_dir = _resolve_repo(config.record_dir)
+        # nav.log_dir defaults to src/navigation/router/ via NavConfig — no override needed.
         return config

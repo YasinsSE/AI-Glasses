@@ -1,11 +1,11 @@
-"""Navigation (router) configuration.
+"""Navigation (router) configuration."""
 
-All tunable constants for the routing subsystem in one place. A ``NavConfig``
-instance is passed to every router module that needs settings, and is composed
-by :class:`main.config.ALASConfig`.
-"""
-
+import os
 from dataclasses import dataclass
+
+# Route files (active_route.json, nav_session.jsonl) live alongside the
+# router source so they are easy to find and don't pollute other directories.
+_ROUTER_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # ---------------------------------------------------------------------------
@@ -44,8 +44,8 @@ class NavConfig:
     long_stretch_threshold_m: float = 100.0  # > N -> fall back to the periodic reminder.
     progress_announce_interval: float = 30.0  # "X metres to go" reminder period.
 
-    # Logging
-    log_dir: str = "."                     # directory for saved JSON files
+    # Route file output
+    log_dir: str = _ROUTER_DIR             # always src/navigation/router/
     route_filename: str = "active_route.json"
 
     @property

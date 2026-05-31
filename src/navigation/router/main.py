@@ -31,8 +31,7 @@ logging.basicConfig(
 config = NavConfig(
     waypoint_threshold_m=15.0,
     off_route_threshold_m=40.0,
-    log_dir="logs",
-    route_filename="active_route.json",
+    # log_dir defaults to src/navigation/router/ via NavConfig._ROUTER_DIR
 )
 
 # ------------------------------------------------------------------
@@ -89,7 +88,7 @@ def main() -> None:
         time.sleep(0.05)
 
     print("\n--- Session complete ---")
-    print(f"    Log files written to: {config.log_dir}/")
+    print(f"    Route saved to: {config.route_filepath}")
     #print(nav.list_poi_categories())
 
 if __name__ == "__main__":
