@@ -96,6 +96,13 @@ def install_signal_handlers() -> threading.Event:
 
     signal.signal(signal.SIGINT, _handler)
     signal.signal(signal.SIGTERM, _handler)
+    # SIGHUP: sent when the controlling terminal (SSH session) closes.
+    # Without this, the default action terminates the process immediately
+    # without running Python cleanup or the recorder finalize.
+    try:
+        signal.signal(signal.SIGHUP, _handler)
+    except (OSError, AttributeError):
+        pass  # Windows has no SIGHUP
     return stop_event
 
 

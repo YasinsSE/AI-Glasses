@@ -63,15 +63,23 @@ CLASS_NAMES = {
     ClassID.VEHICLE:            "vehicle",
 }
 
-# BGR colours for optional overlay rendering
+# BGR colours for overlay rendering (OpenCV uses B, G, R order).
+# Designed for maximum distinguishability on camera footage:
+#   green  = safe walkable area
+#   yellow = crosswalk (informational)
+#   gray   = vehicle road surface (don't enter, but not immediately dangerous)
+#   orange = static collision obstacle
+#   dark-orange = fall hazard
+#   magenta = dynamic / moving hazard
+#   red    = vehicle (highest danger)
 CLASS_COLORS_BGR = {
-    ClassID.WALKABLE_SURFACE:   (0, 200, 0),
-    ClassID.CROSSWALK:          (200, 255, 0),
-    ClassID.VEHICLE_ROAD:       (180, 30, 30),
-    ClassID.COLLISION_OBSTACLE: (255, 140, 0),
-    ClassID.FALL_HAZARD:        (255, 80, 0),
-    ClassID.DYNAMIC_HAZARD:     (255, 100, 100),
-    ClassID.VEHICLE:            (255, 0, 0),
+    ClassID.WALKABLE_SURFACE:   (  0, 200,   0),  # green
+    ClassID.CROSSWALK:          (  0, 220, 220),  # yellow
+    ClassID.VEHICLE_ROAD:       (100, 100, 100),  # gray
+    ClassID.COLLISION_OBSTACLE: (  0, 128, 255),  # orange
+    ClassID.FALL_HAZARD:        (  0,  60, 220),  # dark orange
+    ClassID.DYNAMIC_HAZARD:     (200,   0, 200),  # magenta
+    ClassID.VEHICLE:            (  0,   0, 220),  # red
 }
 
 # Alert config per class — priority 0 = silent
@@ -755,10 +763,10 @@ def render_overlay(
             rows.append(f"t+{info['t']:.0f}s")
         if info.get("walkable") is not None:
             rows.append(f"walkable {info['walkable']:.0%}")
-        if info.get("hazard"):
-            rows.append(f"hazard: {info['hazard'].replace('_', ' ')}")
-        # spoken text is intentionally omitted — Turkish chars break cv2.putText
-        # and the viewer.html already shows the full spoken feedback per frame.
+        # hazard name and spoken text intentionally omitted:
+        # hazard is already visible from the color overlay;
+        # spoken text has Turkish chars that break cv2.putText.
+        # Both are available in viewer.html per-frame details.
         row_h = 16
         for i, row in enumerate(rows):
             y = h - pad - (len(rows) - 1 - i) * row_h

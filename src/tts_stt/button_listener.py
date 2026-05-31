@@ -100,21 +100,31 @@ class ButtonListener:
         import sys
 
         logger.info("[Button] Mock mode — press ENTER to simulate button press.")
+        stdin_dead = False
         while not self._stop.is_set():
+            if stdin_dead:
+                # stdin is closed (SSH disconnected). Keep the thread alive so
+                # the lifecycle watchdog does not misread this as a crash and
+                # shut down the whole system. Keyboard input is simply disabled.
+                self._stop.wait(2.0)
+                continue
             try:
                 ready, _, _ = select.select([sys.stdin], [], [], 0.5)
             except (ValueError, OSError):
-                # stdin was closed mid-shutdown
-                break
+                stdin_dead = True
+                continue
             if not ready:
                 continue
             try:
                 line = sys.stdin.readline()
             except (EOFError, OSError):
-                break
+                stdin_dead = True
+                continue
             if line == "":
-                # EOF
-                break
+                # EOF — SSH session likely disconnected.
+                logger.warning("[Button] stdin EOF — keyboard input disabled.")
+                stdin_dead = True
+                continue
             if not self._stop.is_set():
                 self._safe_callback()
 
