@@ -70,6 +70,9 @@ class PerceptionService(threading.Thread):
         self._last_vfh: Optional[tuple] = None  # (text, monotonic timestamp)
         # Global minimum gap between any two obstacle speaks.
         self._last_obstacle_speak_at: float = 0.0
+        # Last scene state (hazard_type, walkable_bucket). Used to detect
+        # whether the scene has meaningfully changed between frames.
+        self._last_hazard_state: Optional[tuple] = None
         # Tracks safe↔unsafe transitions for the "Yol açık" announcement.
         self._last_safe_announce_at: float = -999.0
         self._prev_scene_safe: Optional[bool] = None
@@ -351,16 +354,24 @@ class PerceptionService(threading.Thread):
 
         self._prev_scene_safe = False
 
-        # ── Unsafe scene: global minimum interval between any obstacle speak ──
-        interval_ok = (
-            now - self._last_obstacle_speak_at
-            >= self._config.ai.min_obstacle_interval_sec
+        # ── Unsafe scene: state-change aware interval ─────────────────────────
+        # Coarse walkable bucket (0=blocked, 1=very narrow, 2=narrow, 3=clear).
+        w = result.scene.walkable_ratio
+        w_bucket = 0 if w < 0.03 else (1 if w < 0.10 else (2 if w < 0.25 else 3))
+        current_state = (result.scene.dominant_hazard, w_bucket)
+        state_changed = current_state != self._last_hazard_state
+
+        min_interval = (
+            self._config.ai.min_obstacle_interval_sec if state_changed
+            else self._config.ai.min_obstacle_repeat_sec
         )
+        interval_ok = (now - self._last_obstacle_speak_at) >= min_interval
 
         if interval_ok and message and self._should_speak(message, now):
             self._voice.say_obstacle(message)
             self._last_spoken = (message, now)
             self._last_obstacle_speak_at = now
+            self._last_hazard_state = current_state
             spoke = True
             if top_alert is not None and self._pipeline is not None:
                 # Cooldown is consumed only by speech that actually reached

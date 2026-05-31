@@ -53,11 +53,12 @@ class AIConfig:
     # Perception dispatcher cadences.
     obstacle_dedupe_ttl_sec: float = 12.0    # Re-allow an identical alert after N s.
     path_guidance_cooldown_sec: float = 8.0  # Min gap between identical path-guidance lines.
-    # Global minimum gap between any two spoken obstacle alerts, regardless of
-    # whether the combined guidance+alert text changed. Prevents the dispatcher
-    # from speaking every frame when guidance oscillates left/right.
+    # Minimum gap between obstacle speaks when the hazard STATE changed
+    # (different hazard type, or walkable severity bucket shifted).
     min_obstacle_interval_sec: float = 4.0
-    # "Yol açık, devam edebilirsiniz." is emitted this often while the scene is
-    # safe (no hazard with priority ≥ 3). First emission fires at the transition
-    # from unsafe → safe; subsequent emissions repeat after this interval.
-    safe_announce_interval_sec: float = 15.0
+    # Minimum gap between obstacle speaks when the scene state is UNCHANGED
+    # (same hazard type, same severity bucket). Prevents repeating "Araç var"
+    # every few seconds for a static parked car.
+    min_obstacle_repeat_sec: float = 20.0
+    # "Yol açık" repeat interval while the scene stays safe.
+    safe_announce_interval_sec: float = 30.0
