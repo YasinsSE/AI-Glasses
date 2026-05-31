@@ -309,6 +309,12 @@ class PerceptionService(threading.Thread):
         vfh_text = self._select_vfh_guidance(result, nav_active, now)
         if vfh_text is not None:
             guidance_text = vfh_text
+            # VFH found a clear escape route — saying "go left" and "STOP" in
+            # the same utterance contradicts the user. Suppress the vehicle
+            # alert; the directional cue carries the full message.
+            if (top_alert is not None
+                    and top_alert.class_id == int(ClassID.VEHICLE)):
+                top_alert = None
 
         if guidance_text and top_alert is not None:
             message = "{} — {}".format(guidance_text, top_alert.text)

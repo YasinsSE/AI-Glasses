@@ -583,7 +583,24 @@ def generate_alerts(
             if not (is_center or is_close):
                 continue
 
-        parts: list = [cfg["alert"]]
+        # ── Vehicle text variant based on lateral position ───────────────────
+        # "Durun" is only appropriate when the vehicle blocks the FORWARD path
+        # (center zone) and there is no walkable bypass. When the vehicle is to
+        # the side — or the scene has enough walkable area to route around it —
+        # a softer text guides the user without the false "stop" command.
+        if zone.class_id == ClassID.VEHICLE:
+            vehicle_in_center = zone.dominant_zone == "center"
+            path_completely_blocked = scene.walkable_ratio < 0.03
+            if not vehicle_in_center and not path_completely_blocked:
+                base_text = "Araç yakınızda, dikkatli ilerleyin"
+            elif not path_completely_blocked:
+                base_text = "İleride araç var, yavaşlayın"
+            else:
+                base_text = cfg["alert"]  # "Durun, önünüzde engel var"
+        else:
+            base_text = cfg["alert"]
+
+        parts: list = [base_text]
 
         if zone.estimated_distance_m is not None:
             if zone.estimated_distance_m < VERY_CLOSE_M:
