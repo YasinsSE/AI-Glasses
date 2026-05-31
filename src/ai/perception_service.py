@@ -50,19 +50,32 @@ class PerceptionService(threading.Thread):
 
         self._pipeline: Optional[PerceptionPipeline] = None
         self._cap = None  # cv2.VideoCapture, lazy import.
-        # Dedupe identical TTS lines. (text, monotonic timestamp). The TTL
-        # prevents the user from being silently denied a real warning when
-        # they re-encounter the same hazard after walking away.
-        self._last_spoken: Optional[tuple] = None
         self._last_path_guidance: Optional[tuple] = None
         self._last_vfh: Optional[tuple] = None  # (text, monotonic timestamp)
         # Global minimum gap between any two obstacle speaks.
         self._last_obstacle_speak_at: float = 0.0
-        # Last scene state (hazard_type, walkable_bucket, safety_level).
-        self._last_hazard_state: Optional[tuple] = None
+
+        # ── Situation tracking (replaces string-based dedupe) ──────────────
+        # Speech gating keys on a stable "situation signature"
+        # (hazard_class, zone, safety_level) rather than the rendered string,
+        # so flickering proximity/direction words no longer defeat dedupe.
+        # _cur_sig tracks frame-to-frame continuity (escalation counting);
+        # _last_spoken_sig + _last_obstacle_speak_at drive the speak cadence.
+        self._cur_sig: Optional[tuple] = None
+        self._last_spoken_sig: Optional[tuple] = None
+        self._last_safety: int = -1          # safety_level of the last spoken sig
+        self._in_path_frames: int = 0        # consecutive frames hazard blocks path
+        self._sig_escalated: bool = False    # current sig already escalated to a dodge
+        # Hysteresis state, keyed by class_id, so zone/proximity wording only
+        # changes after the new value persists. (class_id -> ...).
+        self._zone_state: dict = {}          # cid -> (stable, pending, pending_count)
+        self._band_state: dict = {}          # cid -> proximity band string
+
         # Tracks safety-level transitions for "Yol açık" announcement.
         self._last_safe_announce_at: float = -999.0
         self._prev_safety_level: int = -1  # -1 = unknown (first frame)
+        # Loop heartbeat for the stall watchdog (set each iteration).
+        self._last_heartbeat: float = 0.0
         self.model_ready = threading.Event()
 
     # ── Camera helpers (private) ─────────────────────────────────
@@ -208,8 +221,26 @@ class PerceptionService(threading.Thread):
         interval = 1.0 / self._config.ai.perception_fps
         frames_done = 0
         window_start = time.monotonic()
+        self._last_heartbeat = time.monotonic()
 
         while not self._stop_event.is_set():
+            # ── Stall watchdog ───────────────────────────────────────────
+            # The thread runs every iteration in well under a second; a large
+            # gap between heartbeats means the whole process was starved (e.g.
+            # Chromium hogging the Jetson). On recovery we drop the stale
+            # situation state so the user is warned about the CURRENT scene,
+            # not the one from before the freeze.
+            beat = time.monotonic()
+            gap = beat - self._last_heartbeat
+            self._last_heartbeat = beat
+            if gap > self._config.ai.stall_warn_sec:
+                logger.warning("[Perception] loop stalled %.1fs — resetting situation state.", gap)
+                self._reset_situation()
+                if self._pipeline is not None:
+                    self._pipeline.reset_cooldowns()
+                if gap > self._config.ai.stall_announce_sec:
+                    self._voice.say_obstacle("Görüş gecikiyor.")
+
             # Mode gate — skip in WARMUP / SLEEP / SHUTDOWN.
             if self._modes.mode != SystemMode.ACTIVE:
                 self._stop_event.wait(0.2)
@@ -269,54 +300,29 @@ class PerceptionService(threading.Thread):
     # ── Alert dispatch ───────────────────────────────────────────
 
     def _dispatch(self, result, frame=None) -> None:
-        """Filter, dedupe, and forward perception output to the voice policy.
+        """Filter, track, and forward perception output to the voice policy.
 
-        Three independent decisions:
-          1. Pick the top obstacle alert (filtered by class for nav-only
-             classes like CROSSWALK).
-          2. Decide whether to also emit path guidance — only when no nav
-             route is active (the route already gives directional cues) and
-             only when the guidance text actually changed (or its TTL elapsed).
-          3. Combine, dedupe against the last-spoken line with a TTL, speak
-             once, then stamp cooldown on the alert that was actually spoken.
+        Speech is gated on a stable *situation signature* — (hazard class,
+        stabilised zone, safety level) — instead of the rendered string, so a
+        parked car whose proximity/direction wording flickers frame-to-frame
+        is announced once and then held for ``min_obstacle_repeat_sec``.
+
+        A hazard that persists in the forward path escalates from a calm "var"
+        notice to an actionable VFH dodge ("...hafif sağa yönelin"); one that
+        drifts out of the path is dropped silently.
         """
         nav_active = self._nav is not None and self._nav.is_active
         now = time.monotonic()
+        scene = result.scene
+        safety_level = getattr(scene, "safety_level", SAFETY_UNSAFE)
 
+        # Top obstacle alert (respecting nav-only classes like CROSSWALK).
         top_alert: Optional[Alert] = None
         for alert in result.alerts:
             if alert.class_id in _NAV_ONLY_CLASSES and not nav_active:
                 continue
             top_alert = alert
             break
-
-        guidance_text = self._select_path_guidance(
-            result.path_guidance, nav_active, now,
-        )
-
-        # VFH local planner: when triggered, its escape-route guidance is more
-        # actionable than the generic "Hafif sağa yönelin" — let it override.
-        vfh_text = self._select_vfh_guidance(result, nav_active, now)
-        if vfh_text is not None:
-            guidance_text = vfh_text
-            # VFH found a clear escape route — saying "go left" and "STOP" in
-            # the same utterance contradicts the user. Suppress the vehicle
-            # alert; the directional cue carries the full message.
-            if (top_alert is not None
-                    and top_alert.class_id == int(ClassID.VEHICLE)):
-                top_alert = None
-
-        if guidance_text and top_alert is not None:
-            message = "{} — {}".format(guidance_text, top_alert.text)
-        elif guidance_text:
-            message = guidance_text
-        elif top_alert is not None:
-            message = top_alert.text
-        else:
-            message = None
-
-        safety_level = getattr(result.scene, "safety_level", SAFETY_UNSAFE)
-        spoke = False
 
         # ── SAFE: "Yol açık" on transition, then periodic reminder ──────────
         if safety_level == SAFETY_SAFE:
@@ -326,61 +332,240 @@ class PerceptionService(threading.Thread):
                 >= self._config.ai.safe_announce_interval_sec
             )
             safe_msg = "Yol açık, devam edebilirsiniz."
+            spoke = False
             if just_became_safe or interval_expired:
                 self._voice.say_obstacle(safe_msg)
-                self._last_spoken = (safe_msg, now)
                 self._last_safe_announce_at = now
                 spoke = True
             self._prev_safety_level = SAFETY_SAFE
+            self._reset_situation()  # left the hazard — next one starts fresh
             self._rec.log_perception(result, chosen=safe_msg if spoke else None)
             if spoke and frame is not None:
                 self._rec.maybe_save_overlay(frame, result.mask, "safe", info={
-                    "walkable": result.scene.walkable_ratio,
+                    "walkable": scene.walkable_ratio,
                 })
             return
 
         self._prev_safety_level = safety_level
 
-        # ── CAUTION / UNSAFE: state-change aware interval ────────────────────
-        # State key includes safety_level so caution→unsafe triggers a new speak.
-        w = result.scene.walkable_ratio
-        w_bucket = 0 if w < 0.03 else (1 if w < 0.10 else (2 if w < 0.25 else 3))
-        current_state = (result.scene.dominant_hazard, w_bucket, safety_level)
-        state_changed = current_state != self._last_hazard_state
+        # Plan a VFH escape route once for this frame. No announce cooldown
+        # here — the signature cadence below decides what reaches the user.
+        vfh = self._vfh_plan(result, nav_active)
 
-        if safety_level == SAFETY_CAUTION:
-            # Caution: hazard off-path, always use long interval
-            min_interval = self._config.ai.min_obstacle_repeat_sec
+        # ── No obstacle alert: fall back to directional guidance ────────────
+        if top_alert is None:
+            guidance_text = self._vfh_standalone_text(vfh, now)
+            if guidance_text is None:
+                guidance_text = self._select_path_guidance(
+                    result.path_guidance, nav_active, now,
+                )
+            spoke = False
+            if (guidance_text
+                    and (now - self._last_obstacle_speak_at)
+                    >= self._config.ai.min_obstacle_interval_sec):
+                self._voice.say_obstacle(guidance_text)
+                self._last_obstacle_speak_at = now
+                spoke = True
+            self._rec.log_perception(result, chosen=guidance_text if spoke else None)
+            return
+
+        # ── Obstacle present: stabilise wording, build signature ────────────
+        cid = top_alert.class_id
+        zone = self._stabilize_zone(cid, top_alert.zone)
+        band = self._proximity_band(cid, top_alert.distance_m, top_alert.pixel_ratio)
+        sig = (cid, zone, safety_level)
+
+        # Frame-to-frame continuity (drives escalation counting).
+        if sig != self._cur_sig:
+            self._cur_sig = sig
+            self._sig_escalated = False
+            self._in_path_frames = 0
+
+        in_path = (zone == "center") and top_alert.blocks_path
+        self._in_path_frames = self._in_path_frames + 1 if in_path else 0
+        can_dodge = vfh is not None and bool(getattr(vfh, "text", None))
+        escalate = (
+            in_path
+            and self._in_path_frames >= self._config.ai.escalation_frames
+            and can_dodge
+        )
+        escalate_now = escalate and not self._sig_escalated
+
+        vfh_text = vfh.text if (escalate and can_dodge) else None
+        message = self._render_message(top_alert, zone, band, scene, vfh_text, escalate)
+
+        # ── Cadence: short on change/escalation, long when unchanged ────────
+        sig_changed = sig != self._last_spoken_sig
+        safety_increased = safety_level > self._last_safety
+        if sig_changed or escalate_now or safety_increased:
+            min_interval = self._config.ai.min_obstacle_interval_sec
         else:
-            # Unsafe: short interval on state change, long when scene unchanged
-            min_interval = (
-                self._config.ai.min_obstacle_interval_sec if state_changed
-                else self._config.ai.min_obstacle_repeat_sec
-            )
+            min_interval = self._config.ai.min_obstacle_repeat_sec
         interval_ok = (now - self._last_obstacle_speak_at) >= min_interval
 
-        if interval_ok and message and self._should_speak(message, now):
+        spoke = False
+        if interval_ok and message:
             self._voice.say_obstacle(message)
-            self._last_spoken = (message, now)
             self._last_obstacle_speak_at = now
-            self._last_hazard_state = current_state
+            self._last_spoken_sig = sig
+            self._last_safety = safety_level
+            self._sig_escalated = escalate
             spoke = True
-            if top_alert is not None and self._pipeline is not None:
-                self._pipeline.mark_alert_spoken(top_alert.class_id)
+            if self._pipeline is not None:
+                self._pipeline.mark_alert_spoken(cid)
 
         self._rec.log_perception(result, chosen=message if spoke else None)
         if spoke and frame is not None:
-            tag = (result.scene.dominant_hazard or "alert").replace(" ", "_")
+            tag = (scene.dominant_hazard or "alert").replace(" ", "_")
             self._rec.maybe_save_overlay(frame, result.mask, tag, info={
-                "walkable": result.scene.walkable_ratio,
+                "walkable": scene.walkable_ratio,
             })
 
         if safety_level >= SAFETY_CAUTION:
             logger.debug(
-                "[Perception] level=%d hazard=%s walkable=%.0f%% inf=%.0fms",
-                safety_level, result.scene.dominant_hazard,
-                result.scene.walkable_ratio * 100.0, result.inference_ms,
+                "[Perception] sig=%s escalate=%s walkable=%.0f%% inf=%.0fms",
+                sig, escalate, scene.walkable_ratio * 100.0, result.inference_ms,
             )
+
+    # ── Situation helpers ────────────────────────────────────────
+
+    def _reset_situation(self) -> None:
+        """Forget all hazard tracking — used on SAFE and after a loop stall."""
+        self._cur_sig = None
+        self._last_spoken_sig = None
+        self._last_safety = -1
+        self._in_path_frames = 0
+        self._sig_escalated = False
+        self._zone_state.clear()
+        self._band_state.clear()
+        self._last_obstacle_speak_at = 0.0
+
+    def _stabilize_zone(self, class_id: int, zone: str) -> str:
+        """Hysteresis on the dominant zone: a new zone must persist two frames
+        before it replaces the current one, so a single jittery frame does not
+        flip "önünüzde" ↔ "solunuzda" and spawn a fresh signature."""
+        stable, pending, count = self._zone_state.get(class_id, (zone, zone, 0))
+        if zone == stable:
+            self._zone_state[class_id] = (stable, stable, 0)
+            return stable
+        if zone == pending:
+            count += 1
+        else:
+            pending, count = zone, 1
+        if count >= 2:
+            self._zone_state[class_id] = (zone, zone, 0)
+            return zone
+        self._zone_state[class_id] = (stable, pending, count)
+        return stable
+
+    def _proximity_band(
+        self, class_id: int, distance_m: Optional[float], pixel_ratio: float,
+    ) -> str:
+        """Return ``'very_close' | 'near' | 'far'`` with hysteresis so the band
+        does not dither across a threshold from frame to frame."""
+        from ai.perception import VERY_CLOSE_M, NEARBY_M, VERY_CLOSE_RATIO, NEARBY_RATIO
+        cur = self._band_state.get(class_id, "far")
+        m = self._config.ai.proximity_hysteresis_m
+        if distance_m is not None:
+            if cur == "very_close":
+                band = ("very_close" if distance_m < VERY_CLOSE_M + m
+                        else "near" if distance_m < NEARBY_M + m else "far")
+            elif cur == "near":
+                band = ("very_close" if distance_m < VERY_CLOSE_M - m
+                        else "near" if distance_m < NEARBY_M + m else "far")
+            else:  # far
+                band = ("very_close" if distance_m < VERY_CLOSE_M - m
+                        else "near" if distance_m < NEARBY_M - m else "far")
+        else:
+            band = ("very_close" if pixel_ratio > VERY_CLOSE_RATIO
+                    else "near" if pixel_ratio > NEARBY_RATIO else "far")
+        self._band_state[class_id] = band
+        return band
+
+    _LOC_WORD = {"left": "Solunuzda", "right": "Sağınızda", "center": "Önünüzde"}
+    _HAZARD_NOUN = {
+        int(ClassID.VEHICLE): "araç",
+        int(ClassID.COLLISION_OBSTACLE): "engel",
+        int(ClassID.DYNAMIC_HAZARD): "hareketli nesne",
+    }
+
+    def _render_message(self, alert, zone, band, scene, vfh_text, escalate) -> str:
+        """Compose a short, prioritised Turkish line from the structured alert.
+
+        Order of preference: fully-blocked stop > actionable VFH dodge >
+        centre-blocking stop > calm "var" notice. At most one modifier
+        (proximity) is appended, and only when very close.
+        """
+        cid = alert.class_id
+
+        # Non-positional hazards have fixed phrasing.
+        if cid == int(ClassID.VEHICLE_ROAD):
+            return "Dikkat, araç yolu, girmeyin"
+        if cid == int(ClassID.CROSSWALK):
+            return "Yaya geçidi, geçiş güvenli"
+        if cid == int(ClassID.FALL_HAZARD):
+            return "Zemin tehlikesi, dikkatli ilerleyin"
+
+        noun = self._HAZARD_NOUN.get(cid, "engel")
+        loc = self._LOC_WORD.get(zone, "Önünüzde")
+
+        # No way through at all.
+        if alert.blocks_path and scene.walkable_ratio < 0.03:
+            return "Durun, yol kapalı"
+
+        # Persisting in the path and we have a clear escape sector → dodge.
+        if escalate and vfh_text:
+            dodge = vfh_text[0].lower() + vfh_text[1:] if vfh_text else vfh_text
+            return f"Önünüzde {noun} var, {dodge}"
+
+        # In the path, blocking, but no dodge yet → cautious stop.
+        if zone == "center" and alert.blocks_path:
+            return f"Durun, önünüzde {noun}"
+
+        # Calm informational notice.
+        msg = f"{loc} {noun} var"
+        if band == "very_close":
+            msg += ", çok yakın"
+        return msg
+
+    def _vfh_plan(self, result, nav_active: bool):
+        """Run the VFH local planner for this frame; return its guidance or None.
+
+        Unlike the old path, this does NOT apply an announce cooldown — the
+        signature cadence in ``_dispatch`` owns repeat suppression now.
+        """
+        if self._vfh is None:
+            return None
+        target_action = None
+        if nav_active and self._nav is not None:
+            step = getattr(self._nav, "current_step", None)
+            if step is not None:
+                target_action = getattr(step, "action", None)
+        try:
+            guidance = self._vfh.plan(
+                result.mask, result.scene, target_action=target_action,
+            )
+        except Exception:
+            logger.exception("[Perception] VFH plan failed")
+            return None
+        if guidance is not None:
+            logger.debug(
+                "[Perception] VFH: action=%s sector=%d",
+                guidance.action.value, guidance.sector_index,
+            )
+        return guidance
+
+    def _vfh_standalone_text(self, guidance, now: float) -> Optional[str]:
+        """VFH line for the no-obstacle case, with its own announce cooldown."""
+        if guidance is None or not getattr(guidance, "text", None):
+            return None
+        cooldown = self._config.vfh.announce_cooldown_sec
+        if self._last_vfh is not None:
+            last_text, last_ts = self._last_vfh
+            if guidance.text == last_text and (now - last_ts) < cooldown:
+                return None
+        self._last_vfh = (guidance.text, now)
+        return guidance.text
 
     def _select_path_guidance(
         self,
@@ -414,54 +599,3 @@ class PerceptionService(threading.Thread):
             return guidance_text
         return None
 
-    def _select_vfh_guidance(self, result, nav_active: bool, now: float) -> Optional[str]:
-        """Run the VFH local planner and return its TTS line, if any.
-
-        Suppressed when the planner is disabled, has no result this frame, or
-        the same escape line was already spoken within the cooldown window.
-        Target action (when global nav is active) biases sector selection
-        toward the next turn so the dodge stays on-route.
-        """
-        if self._vfh is None:
-            return None
-        target_action = None
-        if nav_active and self._nav is not None:
-            step = getattr(self._nav, "current_step", None)
-            if step is not None:
-                target_action = getattr(step, "action", None)
-        try:
-            guidance = self._vfh.plan(result.mask, result.scene, target_action=target_action)
-        except Exception:
-            logger.exception("[Perception] VFH plan failed")
-            return None
-        if guidance is None:
-            return None
-
-        logger.debug(
-            "[Perception] VFH: action=%s sector=%d hist=%s",
-            guidance.action.value, guidance.sector_index,
-            ["%.2f" % h for h in guidance.histogram],
-        )
-
-        cooldown = self._config.vfh.announce_cooldown_sec
-        if self._last_vfh is not None:
-            last_text, last_ts = self._last_vfh
-            if guidance.text == last_text and (now - last_ts) < cooldown:
-                return None
-        self._last_vfh = (guidance.text, now)
-        return guidance.text
-
-    def _should_speak(self, message: str, now: float) -> bool:
-        """Dedupe identical consecutive utterances, but not forever.
-
-        Without a TTL the user is silently denied a real warning when they
-        re-encounter the same obstacle later in the walk. The TTL gives
-        ``generate_alerts`` cooldowns enough headroom to do their job while
-        still re-warning when the world has had time to change.
-        """
-        if self._last_spoken is None:
-            return True
-        last_text, last_ts = self._last_spoken
-        if message != last_text:
-            return True
-        return (now - last_ts) >= self._config.ai.obstacle_dedupe_ttl_sec

@@ -100,6 +100,11 @@ WALKABLE_GATED_CLASSES = {ClassID.COLLISION_OBSTACLE, ClassID.FALL_HAZARD}
 VERY_CLOSE_M = 2.0
 NEARBY_M = 5.0
 
+# A centre-zone hazard counts as "blocking the forward path" when the scene
+# has less walkable area than this. Mirrors AIConfig.block_walkable_ratio;
+# kept as a module constant because generate_alerts is a pure function.
+BLOCK_WALKABLE_RATIO = 0.12
+
 # Safety-level thresholds for vehicle classification.
 # A vehicle only contributes UNSAFE if it has significant presence in
 # the bottom half of the frame (i.e. close/ground-level) or covers a
@@ -148,12 +153,22 @@ class Alert:
     """A single hazard announcement candidate.
 
     Carries enough structured context for the dispatcher to filter by class
-    (e.g. only crosswalks while navigating) and to stamp the per-class
-    cooldown only after the alert is actually spoken.
+    (e.g. only crosswalks while navigating), to stamp the per-class cooldown
+    only after the alert is actually spoken, and — crucially — to re-render
+    the spoken line itself.
+
+    ``text`` is only a concise fallback/logging string. The final spoken
+    message is composed by ``PerceptionService`` from the structured fields
+    below, because the dispatcher applies zone/proximity hysteresis so the
+    wording does not flicker frame-to-frame (which used to defeat dedupe).
     """
     class_id: int
     text: str
     priority: int
+    zone: str = "center"                      # "left" | "center" | "right"
+    distance_m: Optional[float] = None        # ground distance estimate, if any
+    pixel_ratio: float = 0.0                  # fraction of frame occupied
+    blocks_path: bool = False                 # in the forward path with no easy bypass
 
 
 @dataclass
@@ -645,46 +660,27 @@ def generate_alerts(
             if not (is_center or is_close):
                 continue
 
-        # ── Vehicle text variant based on lateral position ───────────────────
-        # "Durun" is only appropriate when the vehicle blocks the FORWARD path
-        # (center zone) and there is no walkable bypass. When the vehicle is to
-        # the side — or the scene has enough walkable area to route around it —
-        # a softer text guides the user without the false "stop" command.
-        if zone.class_id == ClassID.VEHICLE:
-            vehicle_in_center = zone.dominant_zone == "center"
-            path_completely_blocked = scene.walkable_ratio < 0.03
-            if not vehicle_in_center and not path_completely_blocked:
-                base_text = "Araç yakınızda, dikkatli ilerleyin"
-            elif not path_completely_blocked:
-                base_text = "İleride araç var, yavaşlayın"
-            else:
-                base_text = cfg["alert"]  # "Durun, önünüzde engel var"
-        else:
-            base_text = cfg["alert"]
+        # Forward-path blocking hint: a hazard in the centre zone with little
+        # walkable area to route around it. Used by the dispatcher to decide
+        # when a calm "var" notice should escalate to an actionable dodge.
+        # NOTE: wording (direction / proximity) is intentionally NOT baked in
+        # here — the dispatcher renders the final line after applying zone and
+        # proximity hysteresis, so it does not flicker frame-to-frame.
+        in_center = zone.dominant_zone == "center"
+        blocks_path = in_center and scene.walkable_ratio < BLOCK_WALKABLE_RATIO
 
-        parts: list = [base_text]
-
-        if zone.estimated_distance_m is not None:
-            if zone.estimated_distance_m < VERY_CLOSE_M:
-                parts.append("çok yakın")
-            elif zone.estimated_distance_m < NEARBY_M:
-                parts.append("yakın")
-        else:
-            # Fallback for callers without CameraGeometry (e.g. offline tests).
-            if zone.pixel_ratio > VERY_CLOSE_RATIO:
-                parts.append("çok yakın")
-            elif zone.pixel_ratio > NEARBY_RATIO:
-                parts.append("yakın")
-
-        if zone.dominant_zone == "left":
-            parts.append("solunuzda")
-        elif zone.dominant_zone == "right":
-            parts.append("sağınızda")
+        # Concise fallback / log text. The spoken message is re-rendered by
+        # PerceptionService from the structured fields below.
+        base_text = cfg["alert"]
 
         raw.append(Alert(
             class_id=zone.class_id,
-            text=", ".join(parts),
+            text=base_text,
             priority=cfg["priority"],
+            zone=zone.dominant_zone,
+            distance_m=zone.estimated_distance_m,
+            pixel_ratio=zone.pixel_ratio,
+            blocks_path=blocks_path,
         ))
 
     raw.sort(key=lambda a: a.priority, reverse=True)

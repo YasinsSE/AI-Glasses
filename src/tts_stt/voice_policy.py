@@ -93,7 +93,7 @@ class VoicePolicy:
             if time.monotonic() < self._suppress_obstacles_until:
                 self._rec.log_speak("obstacle", text, False, reason="post_nav_silence")
                 return
-        speak(text)
+        speak(text, kind="obstacle")
         self._rec.log_speak("obstacle", text, True)
 
     # ── Polled by services ───────────────────────────────────────

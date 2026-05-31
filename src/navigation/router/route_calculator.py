@@ -48,9 +48,10 @@ def _build_steps(path, start_node: Node) -> List[RouteStep]:
 
     # Step 0: departure
     first_edge = path[0][1]
+    road = first_edge.name or "yol"
     steps.append(RouteStep(
         step_id=0,
-        text=f"Navigation starting. You are on: {first_edge.name}",
+        text=f"Rota başlıyor. {road} üzerindesiniz",
         location=Coord(start_node.lat, start_node.lon),
         action="start",
         distance_meters=0,
@@ -68,7 +69,7 @@ def _build_steps(path, start_node: Node) -> List[RouteStep]:
         # Emit a step when road name changes or we reach the end
         if not next_edge or next_edge.name != curr_name or next_edge.road_type != edge.road_type:
             action = "continue"
-            turn_text = "Go straight"
+            turn_text = "düz devam edin"
 
             if next_edge:
                 b1 = calculate_bearing(node.lat, node.lon, edge.target.lat, edge.target.lon)
@@ -77,17 +78,20 @@ def _build_steps(path, start_node: Node) -> List[RouteStep]:
                     next_edge.target.lat, next_edge.target.lon,
                 )
                 turn_text = get_turn_instruction(b2 - b1)
-                if "right" in turn_text.lower():
+                if "sağ" in turn_text:
                     action = "turn_right"
-                elif "left" in turn_text.lower():
+                elif "sol" in turn_text:
                     action = "turn_left"
+                # Bare instruction only; NavigationService prepends the live
+                # distance ("30 metre sonra sağa dönün") so it stays accurate.
+                step_text = turn_text
             else:
-                turn_text = "You have reached your destination"
                 action = "finish"
+                step_text = "Hedefinize ulaştınız"
 
             steps.append(RouteStep(
                 step_id=step_id,
-                text=f"After {int(dist_accum)} m — {turn_text}.",
+                text=step_text,
                 location=Coord(edge.target.lat, edge.target.lon),
                 action=action,
                 distance_meters=int(dist_accum),

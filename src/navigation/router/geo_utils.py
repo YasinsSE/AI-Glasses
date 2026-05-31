@@ -61,11 +61,11 @@ def get_turn_instruction(bearing_diff: float) -> str:
     """
     diff = (bearing_diff + 180) % 360 - 180
     if diff > 45:
-        return "Turn sharp right"
+        return "sert sağa dönün"
     elif diff > 10:
-        return "Turn right"
+        return "sağa dönün"
     elif diff < -45:
-        return "Turn sharp left"
+        return "sert sola dönün"
     elif diff < -10:
-        return "Turn left"
-    return "Go straight"
+        return "sola dönün"
+    return "düz devam edin"

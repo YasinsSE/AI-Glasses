@@ -10,17 +10,44 @@ import sys
 import threading
 import queue
 
-# Queue so utterances do not cut each other off.
+# Queue so utterances do not cut each other off. Items are (kind, text)
+# tuples; ``None`` is the shutdown sentinel.
 _tts_queue = queue.Queue()
+# Guards the read-modify-write when dropping stale obstacle items.
+_queue_lock = threading.Lock()
+
+
+def _drop_pending_obstacles():
+    """Remove not-yet-started obstacle items from the queue.
+
+    Obstacle alerts are spatial and perishable: after the Jetson unfreezes,
+    replaying warnings about cars the user already walked past is worse than
+    silence. We keep only the newest obstacle by dropping any pending ones
+    before enqueuing it. Priority items (nav / announcements) are preserved.
+    Must be called holding ``_queue_lock``.
+    """
+    kept = []
+    try:
+        while True:
+            item = _tts_queue.get_nowait()
+            _tts_queue.task_done()
+            if item is not None and item[0] == "obstacle":
+                continue  # drop stale obstacle
+            kept.append(item)
+    except queue.Empty:
+        pass
+    for item in kept:
+        _tts_queue.put(item)
 
 
 def _tts_worker():
     """Worker thread that speaks queued text in the background."""
     while True:
-        text = _tts_queue.get()
-        if text is None:
+        item = _tts_queue.get()
+        if item is None:
             _tts_queue.task_done()
             break
+        _, text = item
 
         # Jetson Nano / Mac compatible quiet runner. A subprocess is used so a
         # stuck engine cannot freeze the main program.
@@ -52,11 +79,23 @@ _tts_thread = threading.Thread(target=_tts_worker, daemon=True)
 _tts_thread.start()
 
 
-def speak(text: str):
-    """Add text to the speech queue."""
+def speak(text: str, kind: str = "info"):
+    """Add text to the speech queue.
+
+    ``kind="obstacle"`` marks perishable hazard alerts: enqueuing one first
+    drops any pending obstacle still waiting, so a post-freeze backlog never
+    dumps stale spatial warnings. Other kinds (nav, announcements, prompts)
+    always queue in order.
+    """
     text = (text or "").strip()
-    if text:
-        _tts_queue.put(text)
+    if not text:
+        return
+    if kind == "obstacle":
+        with _queue_lock:
+            _drop_pending_obstacles()
+            _tts_queue.put((kind, text))
+    else:
+        _tts_queue.put((kind, text))
 
 
 def wait_until_done():

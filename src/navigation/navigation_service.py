@@ -162,7 +162,12 @@ class NavigationService(threading.Thread):
             dist <= self._config.nav.approach_threshold_m
             and self._prewarned_step_id != step.step_id
         ):
-            self._voice.say_nav(f"{int(dist)} metre sonra {step.text}")
+            # The "start" step is an intro ("Rota başlıyor. X üzerindesiniz"),
+            # not a turn — prefixing it with "N metre sonra" is nonsensical.
+            if step.action == "start":
+                self._voice.say_nav(step.text)
+            else:
+                self._voice.say_nav(f"{int(dist)} metre sonra {step.text}")
             self._prewarned_step_id = step.step_id
             self._last_spoken = step.text
             return

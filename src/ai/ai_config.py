@@ -51,14 +51,39 @@ class AIConfig:
     camera_vfov_deg: float = 60.0   # Vertical field of view.
 
     # Perception dispatcher cadences.
-    obstacle_dedupe_ttl_sec: float = 12.0    # Re-allow an identical alert after N s.
+    obstacle_dedupe_ttl_sec: float = 12.0    # Re-allow the same situation after N s.
     path_guidance_cooldown_sec: float = 8.0  # Min gap between identical path-guidance lines.
-    # Minimum gap between obstacle speaks when the hazard STATE changed
-    # (different hazard type, or walkable severity bucket shifted).
+    # Minimum gap between obstacle speaks when the hazard SITUATION changed
+    # (different hazard class, the dominant zone shifted, or safety escalated).
     min_obstacle_interval_sec: float = 4.0
-    # Minimum gap between obstacle speaks when the scene state is UNCHANGED
-    # (same hazard type, same severity bucket). Prevents repeating "Araç var"
-    # every few seconds for a static parked car.
+    # Minimum gap between obstacle speaks when the situation is UNCHANGED
+    # (same hazard class, same zone, same safety level). Prevents repeating
+    # "Önünüzde araç var" every few seconds for a static parked car.
     min_obstacle_repeat_sec: float = 20.0
     # "Yol açık" repeat interval while the scene stays safe.
     safe_announce_interval_sec: float = 30.0
+
+    # ── Situation tracking / escalation ──────────────────────────────────
+    # A hazard must persist in the forward path for this many consecutive
+    # frames before the calm "var" notice escalates to an actionable VFH
+    # dodge ("...hafif sağa yönelin"). Stops a single noisy frame from
+    # commanding the user to swerve.
+    escalation_frames: int = 2
+    # Hysteresis margin (metres) before the proximity band (uzak/yakın/çok
+    # yakın) is allowed to flip. Without it the distance estimate dithers
+    # across the threshold and re-renders the same warning every frame.
+    proximity_hysteresis_m: float = 0.6
+    # A hazard counts as "blocking the forward path" only when it sits in the
+    # centre zone AND the walkable ratio is below this — otherwise the user
+    # can simply walk past it and no dodge instruction is needed.
+    block_walkable_ratio: float = 0.12
+
+    # ── Perception-loop stall watchdog (Jetson under memory pressure) ─────
+    # If a single frame takes longer than this, treat the loop as having
+    # stalled: on recovery the dispatcher's cooldowns and situation state are
+    # reset so we speak about the CURRENT scene, not the one from before the
+    # freeze.
+    stall_warn_sec: float = 8.0
+    # Only voice "Görüş gecikiyor" when the stall exceeded this longer gap,
+    # so brief hiccups stay silent.
+    stall_announce_sec: float = 15.0
