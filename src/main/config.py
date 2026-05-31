@@ -24,13 +24,26 @@ from tts_stt.voice_config import VoiceConfig
 # Resolve repo-relative paths against the src/ directory so the system can be
 # launched from any working directory, not just from inside src/.
 _SRC_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REPO_ROOT = os.path.dirname(_SRC_ROOT)
 
 
 def _resolve(path: str) -> str:
-    """Make a relative path absolute against the src/ root."""
+    """Make a relative path absolute against the src/ root (for code-relative paths)."""
     if os.path.isabs(path):
         return path
     return os.path.normpath(os.path.join(_SRC_ROOT, path))
+
+
+def _resolve_repo(path: str) -> str:
+    """Make a relative path absolute against the repository root.
+
+    Used for assets that live beside src/ rather than inside it: ``models/``,
+    ``outputs/``, and ``src/logs``. This is why ``--model models/...`` works no
+    matter what directory the system is launched from.
+    """
+    if os.path.isabs(path):
+        return path
+    return os.path.normpath(os.path.join(_REPO_ROOT, path))
 
 
 @dataclass
@@ -118,15 +131,12 @@ class ALASConfig:
         config.record = args.record
         config.live = args.live
 
-        # Anchor relative paths to src/ so the entry point can be invoked from
-        # any working directory, and propagate the log dir into the router.
+        # Anchor relative paths so the entry point can be invoked from any
+        # working directory. The OSM map lives under src/ (code-relative);
+        # models/, outputs/, and src/logs live at the repository root.
         config.osm_map_path = _resolve(config.osm_map_path)
-        config.ai.model_path = _resolve(config.ai.model_path)
-        config.log_dir = _resolve(config.log_dir)
+        config.ai.model_path = _resolve_repo(config.ai.model_path)
+        config.log_dir = _resolve_repo(config.log_dir)
         config.nav.log_dir = config.log_dir
-        # ``outputs/`` lives at the repository root (one level above src/).
-        if not os.path.isabs(config.record_dir):
-            config.record_dir = os.path.normpath(
-                os.path.join(os.path.dirname(_SRC_ROOT), config.record_dir)
-            )
+        config.record_dir = _resolve_repo(config.record_dir)
         return config
