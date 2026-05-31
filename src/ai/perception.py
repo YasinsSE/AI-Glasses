@@ -167,71 +167,174 @@ class PerceptionResult:
 #  INFERENCE BACKENDS
 # ═══════════════════════════════════════════════════════════════════
 
+class _CUDARuntime:
+    """Minimal CUDA runtime wrapper over ``libcudart.so`` via ctypes.
+
+    Deliberately avoids ``pycuda``: on a hand-flashed Jetson Nano (Python 3.6 /
+    CUDA 10.2, e.g. Waveshare eMMC boards) pycuda is painful to build and its
+    compiled symbols often mismatch the L4T-provided CUDA driver at runtime
+    (``undefined symbol: cuProfilerInitialize``). This path needs only
+    ``libcudart.so`` (shipped with CUDA) and the ``tensorrt`` Python module
+    (shipped with JetPack) — no pycuda.
+    """
+
+    _H2D = 1   # cudaMemcpyHostToDevice
+    _D2H = 2   # cudaMemcpyDeviceToHost
+
+    def __init__(self) -> None:
+        import ctypes
+        self._c = ctypes
+        lib = ctypes.CDLL("libcudart.so")
+        lib.cudaMalloc.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_size_t]
+        lib.cudaMalloc.restype = ctypes.c_int
+        lib.cudaFree.argtypes = [ctypes.c_void_p]
+        lib.cudaFree.restype = ctypes.c_int
+        lib.cudaMallocHost.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_size_t]
+        lib.cudaMallocHost.restype = ctypes.c_int
+        lib.cudaFreeHost.argtypes = [ctypes.c_void_p]
+        lib.cudaFreeHost.restype = ctypes.c_int
+        lib.cudaMemcpyAsync.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_void_p]
+        lib.cudaMemcpyAsync.restype = ctypes.c_int
+        lib.cudaStreamCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        lib.cudaStreamCreate.restype = ctypes.c_int
+        lib.cudaStreamSynchronize.argtypes = [ctypes.c_void_p]
+        lib.cudaStreamSynchronize.restype = ctypes.c_int
+        lib.cudaStreamDestroy.argtypes = [ctypes.c_void_p]
+        lib.cudaStreamDestroy.restype = ctypes.c_int
+        self._lib = lib
+
+    @staticmethod
+    def _check(status: int, msg: str = "CUDA error") -> None:
+        if status != 0:
+            raise RuntimeError(f"{msg}: code {status}")
+
+    def malloc(self, n):
+        p = self._c.c_void_p()
+        self._check(self._lib.cudaMalloc(self._c.byref(p), n))
+        return p
+
+    def free(self, p):
+        self._lib.cudaFree(p)
+
+    def malloc_host(self, n):
+        p = self._c.c_void_p()
+        self._check(self._lib.cudaMallocHost(self._c.byref(p), n))
+        return p
+
+    def free_host(self, p):
+        self._lib.cudaFreeHost(p)
+
+    def h2d(self, dst, src_np, n, stream):
+        self._check(self._lib.cudaMemcpyAsync(
+            dst, src_np.ctypes.data_as(self._c.c_void_p), n, self._H2D, stream))
+
+    def d2h(self, dst_ptr, src, n, stream):
+        self._check(self._lib.cudaMemcpyAsync(dst_ptr, src, n, self._D2H, stream))
+
+    def stream_create(self):
+        s = self._c.c_void_p()
+        self._check(self._lib.cudaStreamCreate(self._c.byref(s)))
+        return s
+
+    def stream_sync(self, s):
+        self._check(self._lib.cudaStreamSynchronize(s))
+
+    def stream_destroy(self, s):
+        self._lib.cudaStreamDestroy(s)
+
+
 class TensorRTBackend:
-    """TensorRT engine backend for Jetson Nano."""
+    """TensorRT engine backend for Jetson Nano (pycuda-free; ctypes CUDA runtime)."""
 
     def __init__(self, engine_path: str):
+        import ctypes
         import tensorrt as trt
-        import pycuda.driver as cuda
-        import pycuda.autoinit  # noqa: F401 — initialises CUDA context
 
-        self.cuda = cuda
+        self._ctypes = ctypes
+        self._crt = _CUDARuntime()
+        self._stream = self._crt.stream_create()
+
         trt_logger = trt.Logger(trt.Logger.WARNING)
-
         with open(engine_path, "rb") as f:
             self.engine = trt.Runtime(trt_logger).deserialize_cuda_engine(f.read())
-
         self.context = self.engine.create_execution_context()
-        self.bindings: list = []
-        self.d_input = self.d_output = None
-        self.h_output: Optional[np.ndarray] = None
-        self.output_shape: Optional[tuple] = None
 
-        self.h_input: Optional[np.ndarray] = None
+        self.bindings: list = []
+        self._device_mem: list = []      # device pointers, freed in __del__
+        self._in_idx = 0
+        self._out_idx = 1
+        self._in_nbytes = 0
+        self._out_nbytes = 0
+        self.input_shape: Optional[tuple] = None
+        self.output_shape: Optional[tuple] = None
+        self._h_in_ptr = None            # pinned host input pointer
+        self._h_in: Optional[np.ndarray] = None
+        self._h_out_ptr = None           # pinned host output pointer
+        self._h_out: Optional[np.ndarray] = None
+
         for i in range(self.engine.num_bindings):
             shape = self.engine.get_binding_shape(i)
             dtype = trt.nptype(self.engine.get_binding_dtype(i))
-            size = int(np.prod(shape)) * np.dtype(dtype).itemsize
-            device_mem = cuda.mem_alloc(size)
-            self.bindings.append(int(device_mem))
+            nbytes = int(np.prod(shape)) * np.dtype(dtype).itemsize
+            dptr = self._crt.malloc(nbytes)
+            self.bindings.append(int(dptr.value))
+            self._device_mem.append(dptr)
 
             if self.engine.binding_is_input(i):
-                self.d_input = device_mem
+                self._in_idx = i
+                self._in_nbytes = nbytes
                 self.input_shape = tuple(shape)
-                # Pinned host input buffer — copying frames into this is much
-                # faster than the implicit pageable-to-pinned staging that
-                # memcpy_htod_async would do otherwise.
-                self.h_input = cuda.pagelocked_empty(int(np.prod(shape)), dtype=dtype)
+                # Pinned host input buffer (writable view) for fast H2D copies —
+                # matches the original pycuda pagelocked_empty behaviour.
+                self._h_in_ptr = self._crt.malloc_host(nbytes)
+                buf = (ctypes.c_byte * nbytes).from_address(self._h_in_ptr.value)
+                self._h_in = np.ctypeslib.as_array(buf).view(dtype)
             else:
+                self._out_idx = i
+                self._out_nbytes = nbytes
                 self.output_shape = tuple(shape)
-                self.d_output = device_mem
-                self.h_output = cuda.pagelocked_empty(int(np.prod(shape)), dtype=dtype)
+                # Pinned host output buffer; CUDA writes into it (numpy reads).
+                self._h_out_ptr = self._crt.malloc_host(nbytes)
+                buf = (ctypes.c_byte * nbytes).from_address(self._h_out_ptr.value)
+                self._h_out = np.frombuffer(buf, dtype=dtype)
 
-        self.stream = cuda.Stream()
-        logger.info(f"TensorRT engine loaded — input: {self.input_shape}, output: {self.output_shape}")
+        logger.info(
+            f"TensorRT engine loaded (ctypes runtime) — "
+            f"input: {self.input_shape}, output: {self.output_shape}"
+        )
 
         # Warm-up: TRT JIT-compiles execution plans on the first real call.
-        # Run one zeroed inference so the first user-visible frame does not
-        # eat that one-off latency hit.
         try:
-            warm = np.zeros(self.input_shape, dtype=np.float32)
-            self.predict(warm)
+            self.predict(np.zeros(self.input_shape, dtype=np.float32))
             logger.info("TensorRT engine warmed up.")
         except Exception:
             logger.exception("TensorRT warm-up failed — first real inference will be slow.")
 
     def predict(self, tensor: np.ndarray) -> np.ndarray:
-        # Copy into the pinned host buffer in-place — no extra ascontiguousarray
-        # allocation per frame.
-        np.copyto(self.h_input, tensor.ravel())
-        self.cuda.memcpy_htod_async(self.d_input, self.h_input, self.stream)
+        # Copy into the pinned host buffer in-place — no per-frame allocation.
+        np.copyto(self._h_in, tensor.ravel())
+        self._crt.h2d(self._device_mem[self._in_idx], self._h_in, self._in_nbytes, self._stream)
         self.context.execute_async_v2(
             bindings=self.bindings,
-            stream_handle=self.stream.handle,
+            stream_handle=int(self._stream.value),
         )
-        self.cuda.memcpy_dtoh_async(self.h_output, self.d_output, self.stream)
-        self.stream.synchronize()
-        return self.h_output.reshape(self.output_shape)
+        self._crt.d2h(self._h_out_ptr, self._device_mem[self._out_idx], self._out_nbytes, self._stream)
+        self._crt.stream_sync(self._stream)
+        return self._h_out.reshape(self.output_shape)
+
+    def __del__(self):
+        try:
+            for dptr in self._device_mem:
+                self._crt.free(dptr)
+            if self._h_in_ptr:
+                self._crt.free_host(self._h_in_ptr)
+            if self._h_out_ptr:
+                self._crt.free_host(self._h_out_ptr)
+            if self._stream:
+                self._crt.stream_destroy(self._stream)
+        except Exception:
+            pass
 
 
 class ONNXBackend:
