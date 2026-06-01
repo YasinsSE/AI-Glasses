@@ -69,3 +69,9 @@ stt/tts/
 src/tts_stt/adapters/
 vosk-model-small-tr-0.3/
 vosk-model-small-tr-0.3.zip
+
+# ONNX exported model (large binary — copy manually to Jetson via scp)
+src/tts_stt/slm_onnx/
+
+# ONNX conversion helper script (dev-only tool, not part of the runtime)
+convert_to_onnx.py

@@ -1,23 +1,27 @@
-"""Offline speech-to-text (Vosk) with MLX-based intent classification.
+"""Offline speech-to-text (Vosk) with ONNX-based intent classification.
 
 Runs Vosk Turkish speech recognition and classifies the recognised intent with
-a fine-tuned Qwen SLM (MLX). The Vosk model is downloaded automatically on the
-first run.
+a fine-tuned Qwen SLM exported to ONNX format (runs on both Mac and Jetson).
+The Vosk model is downloaded automatically on the first run.
 
 First-time setup (run once after cloning the repository):
-    1. Install portaudio (required by PyAudio) on macOS: brew install portaudio
-    2. Install the libraries: pip install vosk pyaudio pyttsx3 mlx mlx-lm huggingface_hub
-    3. Log in to Hugging Face: python3 -c "from huggingface_hub import login; login()"
-    4. Download the fine-tuned SLM model: python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Sirius95/ai-glasses-safetensor', local_dir='src/tts_stt/my_custom_slm/')"
-    5. The Vosk Turkish model downloads automatically on first run.
+    1. Install portaudio (required by PyAudio):
+       - macOS:  brew install portaudio
+       - Jetson: sudo apt install portaudio19-dev
+    2. Install the libraries:
+       pip install vosk pyaudio pyttsx3 onnxruntime transformers huggingface_hub
+    3. The ONNX model lives in src/tts_stt/slm_onnx/ (model.onnx + model.onnx_data).
+       Copy both files to the Jetson at the same relative path.
+    4. The Vosk Turkish model downloads automatically on first run.
 
 How to run (from the repository root):
     python3 -m tts_stt.stt
 
-Optional — re-train the SLM model (from the repository root):
+Re-train & re-export the SLM (from the repository root):
     python3 eval/tts_stt/slmprepare.py
     python3 -m mlx_lm lora --model Qwen/Qwen2.5-0.5B-Instruct --data outputs/eval/tts_stt --train --iters 500 --batch-size 4 --num-layers 8 --learning-rate 1e-4 --seed 42
     python3 -m mlx_lm fuse --model Qwen/Qwen2.5-0.5B-Instruct --adapter-path adapters/ --save-path src/tts_stt/my_custom_slm/
+    python3 convert_to_onnx.py
 """
 
 import json
@@ -28,9 +32,11 @@ import threading
 import pyaudio
 import zipfile
 import urllib.request
+import numpy as np
 from pathlib import Path
 from vosk import Model, KaldiRecognizer, SetLogLevel
-from mlx_lm import load, generate  # MLX libraries (Apple Silicon).
+import onnxruntime as ort
+from transformers import AutoTokenizer
 
 # Import from sibling modules in the same package. The try/except keeps the
 # module runnable both as a package member and as a standalone script.
@@ -81,35 +87,46 @@ def ensure_vosk_model(model_dir: Path) -> Path:
     return model_dir
 
 # ──────────────────────────────────────────────────────────────────────────────
-# MLX-BASED SLM CLASSIFIER
+# ONNX-BASED SLM CLASSIFIER  (Mac + Jetson compatible)
 # ──────────────────────────────────────────────────────────────────────────────
 
 class MLXIntentClassifier:
-    """Intent classifier backed by our fine-tuned Qwen model."""
+    """Intent classifier backed by our fine-tuned Qwen model (ONNX Runtime).
+
+    Works on both Apple Silicon (Mac) and NVIDIA Jetson — no MLX required.
+    The ONNX model is loaded from src/tts_stt/slm_onnx/ by default.
+    """
 
     VALID_INTENTS = ["system_command", "navigation", "general"]
 
     def __init__(self, model_path=None):
-        # If no path is given, use the folder next to stt.py.
         if model_path is None:
             current_dir = Path(__file__).resolve().parent
-            model_path = str(current_dir / "my_custom_slm")
+            model_path = str(current_dir / "slm_onnx")
 
-        print(f"[SLM] Loading model: {model_path} ...")
+        print(f"[SLM] Loading ONNX model: {model_path} ...")
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(
-                f"Model folder not found: {model_path}\n"
-                "Make sure the MLX model training (fuse) completed successfully."
+                f"ONNX model folder not found: {model_path}\n"
+                "Run convert_to_onnx.py on Mac to generate it, then copy\n"
+                "src/tts_stt/slm_onnx/ to the same path on the Jetson."
             )
 
-        # Load the model and tokenizer.
-        self.model, self.tokenizer = load(model_path)
-        print("[SLM] Model ready ✓")
+        onnx_file = os.path.join(model_path, "model.onnx")
+
+        # Use CUDA on Jetson, CPU everywhere else.
+        providers = (
+            ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            if ort.get_device() == "GPU"
+            else ["CPUExecutionProvider"]
+        )
+        self._session = ort.InferenceSession(onnx_file, providers=providers)
+        self._tokenizer = AutoTokenizer.from_pretrained(model_path)
+        print(f"[SLM] ONNX model ready ✓  (providers: {self._session.get_providers()})")
 
     def predict(self, text: str):
         """Classify the given text. Returns (intent, confidence)."""
-        # Exact prompt template used during fine-tuning (kept in Turkish).
         prompt = (
             "<|im_start|>user\n"
             "Aşağıdaki komutun niyetini (intent) sınıflandır. "
@@ -118,19 +135,38 @@ class MLXIntentClassifier:
             "<|im_start|>assistant\n"
         )
 
-        # Get the model's answer.
-        response = generate(
-            self.model, self.tokenizer,
-            prompt=prompt, max_tokens=10, verbose=False,
-        )
+        inputs = self._tokenizer(prompt, return_tensors="np")
+        input_ids = inputs["input_ids"].astype(np.int64)
+        attention_mask = inputs["attention_mask"].astype(np.int64)
 
-        # Strip Qwen's extra tokens and noise.
+        # Greedy decode — up to 10 new tokens (intent is a single word).
+        generated = input_ids.copy()
+        for _ in range(10):
+            seq_len = generated.shape[1]
+            ort_inputs = {
+                "input_ids": generated,
+                "attention_mask": np.ones((1, seq_len), dtype=np.int64),
+                "position_ids": np.arange(seq_len, dtype=np.int64).reshape(1, -1),
+            }
+            logits = self._session.run(["logits"], ort_inputs)[0]  # (1, seq, vocab)
+            next_token = int(np.argmax(logits[0, -1, :]))
+            generated = np.concatenate(
+                [generated, np.array([[next_token]], dtype=np.int64)], axis=1
+            )
+            # Stop at Qwen's <|im_end|> token.
+            eos = self._tokenizer.eos_token_id
+            eos_ids = eos if isinstance(eos, list) else [eos]
+            if next_token in eos_ids:
+                break
+
+        # Decode only the newly generated tokens.
+        new_tokens = generated[0, input_ids.shape[1]:]
+        response = self._tokenizer.decode(new_tokens, skip_special_tokens=True)
+
         intent = response.strip().lower()
         intent = intent.replace("<|im_end|>", "").strip()
-        # Keep only the first word (hallucination guard).
         intent = intent.split()[0] if intent else "general"
 
-        # Safe fallback in case of a hallucinated intent.
         if intent not in self.VALID_INTENTS:
             print(f"[SLM] ⚠️  Unknown intent: '{intent}' -> fallback: 'general'")
             return "general", 0.0
