@@ -1,0 +1,43 @@
+[Unit]
+Description=ALAS Launch Button Watcher (physical boot/standby button)
+Documentation=file://%h/AI-Glasses/src/main/boot_launcher.py
+After=multi-user.target sound.target
+Wants=multi-user.target
+
+[Service]
+Type=simple
+
+# ─── EDIT THESE THREE LINES to match your Jetson ─────────────────────────
+# User        : the account that owns the repo / venv (NOT root if avoidable).
+# WorkingDir  : the repo's  src/  directory (so `-m main.boot_launcher` resolves).
+# ExecStart   : the venv's python running the launcher module.
+User=alas
+WorkingDirectory=/home/alas/AI-Glasses/src
+ExecStart=/home/alas/AI-Glasses/venv/bin/python -m main.boot_launcher
+# ─────────────────────────────────────────────────────────────────────────
+
+# GPIO access needs the 'gpio' group; audio output (TTS) needs 'audio'.
+SupplementaryGroups=gpio audio
+Environment=PYTHONUNBUFFERED=1
+
+# Keep the watcher alive across crashes; it is the only way to start ALAS.
+Restart=always
+RestartSec=3
+
+# On `systemctl stop`, SIGTERM tells the watcher to also stop any running
+# alas_main process group before exiting. Give it time for an ordered shutdown.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+
+# ── Install / manage ──────────────────────────────────────────────────────
+#   sudo cp deploy/alas-launcher.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now alas-launcher.service   # start now + at boot
+#   journalctl -u alas-launcher -f                      # follow logs
+#   sudo systemctl stop alas-launcher.service           # stop watcher (+ ALAS)
+#
+# NOTE: the launcher only TOGGLES alas_main. The Jetson never powers off here;
+#       cut wall power to shut the device down.

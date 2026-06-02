@@ -70,25 +70,67 @@ class ButtonListener:
             logger.exception("[Button] Jetson.GPIO unavailable — listener exiting")
             return
 
+        pin = self._config.voice.button_pin
+        debounce = self._config.voice.button_debounce_ms
+
         GPIO.setmode(GPIO.BCM)
-        GPIO.setup(self._config.voice.button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        logger.info(f"[Button] GPIO pin {self._config.voice.button_pin} ready (active-low).")
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+        # Interrupt (edge-detect) path. The callback runs in Jetson.GPIO's
+        # background C-thread, so it MUST stay trivial: it only sets a flag and
+        # returns. Doing heavy work there (loading Vosk, processing audio) would
+        # hold the GIL, overflow the IRQ queue, and crash on bounce/double-tap.
+        # The actual STT session runs in THIS Python thread, after wait().
+        press_event = threading.Event()
+
+        def _isr(channel):  # Jetson.GPIO passes the channel number positionally.
+            press_event.set()
 
         try:
+            GPIO.add_event_detect(pin, GPIO.FALLING, callback=_isr, bouncetime=debounce)
+        except Exception:  # noqa: BLE001 — some Jetson.GPIO builds lack working edge IRQs
+            logger.warning(
+                "[Button] add_event_detect failed — falling back to polling.",
+                exc_info=True,
+            )
+            self._gpio_poll_loop(GPIO, pin, debounce)
+            return
+
+        logger.info(f"[Button] GPIO pin {pin} ready (active-low, interrupt-driven).")
+        try:
             while not self._stop.is_set():
-                if GPIO.input(self._config.voice.button_pin) == GPIO.LOW:
+                # Wake on a flagged press, or periodically to re-check _stop.
+                if press_event.wait(timeout=0.5):
+                    press_event.clear()
+                    if not self._stop.is_set():
+                        self._safe_callback()  # heavy STT work runs HERE, not in the ISR
+        finally:
+            try:
+                GPIO.remove_event_detect(pin)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                # Clean ONLY our PTT pin. A bare GPIO.cleanup() would reset every
+                # pin and kill the boot launcher's listener on BCM 23.
+                GPIO.cleanup(pin)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _gpio_poll_loop(self, GPIO, pin, debounce) -> None:
+        """Software-polling fallback when hardware edge interrupts are unavailable."""
+        logger.info(f"[Button] GPIO pin {pin} ready (active-low, polling fallback).")
+        try:
+            while not self._stop.is_set():
+                if GPIO.input(pin) == GPIO.LOW:
                     self._safe_callback()
                     # Debounce: wait then drain held-down state.
-                    time.sleep(self._config.voice.button_debounce_ms / 1000.0)
-                    while (
-                        GPIO.input(self._config.voice.button_pin) == GPIO.LOW
-                        and not self._stop.is_set()
-                    ):
+                    time.sleep(debounce / 1000.0)
+                    while GPIO.input(pin) == GPIO.LOW and not self._stop.is_set():
                         time.sleep(0.05)
                 time.sleep(0.05)
         finally:
             try:
-                GPIO.cleanup(self._config.voice.button_pin)
+                GPIO.cleanup(pin)  # ONLY our PTT pin — never a global cleanup().
             except Exception:  # noqa: BLE001
                 pass
 

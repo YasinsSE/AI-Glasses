@@ -1,4 +1,4 @@
-# ALAS Architecture & Personal Study Guide
+# ALAS Architecture
 
 **Core Concept - Concurrency:** ALAS runs three long-lived threads (`perception`, `navigation`, `button/voice`) that never call each other directly. They coordinate through shared objects: `ModeManager` (what mode are we in?), `stop_event` (time to quit?), and `VoicePolicy` (who's allowed to talk?).
 
