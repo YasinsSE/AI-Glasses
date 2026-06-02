@@ -37,6 +37,8 @@ WantedBy=multi-user.target
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now alas-launcher.service   # start now + at boot
 #   journalctl -u alas-launcher -f                      # follow logs
+#   journalctl -u alas-launcher -e                      # last logs
+#   journalctl -u alas-launcher -b                      # current boot's logs
 #   sudo systemctl stop alas-launcher.service           # stop watcher (+ ALAS)
 #
 # NOTE: the launcher only TOGGLES alas_main. The Jetson never powers off here;
