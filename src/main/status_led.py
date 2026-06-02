@@ -15,8 +15,14 @@ glance. It is driven by ``alas_main`` — the process that actually knows the
 ONLY that pin (never a global ``GPIO.cleanup()``), so the launcher's BCM 23 and
 the PTT button's BCM 18 are left untouched.
 
-Wiring: ``pin 18 → ~330–470 Ω → LED(+) → LED(−) → GND`` (e.g. GND pin 20). Keep
-the current low — Jetson GPIO drive is limited; use a transistor/MOSFET for a
+**Active-LOW wiring (important).** Jetson GPIO pins idle HIGH when no process
+drives them, so in IDLE (alas_main not running) an active-HIGH LED would stay
+lit. We therefore SINK current: wire ``3.3 V → ~330–470 Ω → LED anode →
+LED cathode → pin 18``. The pin LOW = LED on; pin HIGH (the default) = LED off,
+so the LED is dark in IDLE with nothing driving it. Set ``active_low=False``
+only if you wired the LED the other way (pin → R → LED → GND).
+
+Keep current low — Jetson GPIO drive is limited; use a transistor/MOSFET for a
 bright LED. See ``hardware/PINOUT.md``.
 """
 
@@ -43,11 +49,13 @@ class StatusLED:
         stop_event: threading.Event,
         mock: bool = False,
         pin: int = STATUS_LED_PIN,
+        active_low: bool = True,
     ) -> None:
         self._modes = modes
         self._stop = stop_event
         self._mock = mock
         self._pin = pin
+        self._active_low = active_low  # LED sinks current; pin LOW = on (idle-HIGH safe).
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
@@ -82,21 +90,29 @@ class StatusLED:
             logger.exception("[LED] Jetson.GPIO unavailable — status LED disabled")
             return
 
+        # Map logical on/off to physical pin levels. Active-low (default): pin
+        # LOW = LED on, pin HIGH = off — so the idle-HIGH pin keeps the LED dark.
+        on_level = GPIO.LOW if self._active_low else GPIO.HIGH
+        off_level = GPIO.HIGH if self._active_low else GPIO.LOW
+
         GPIO.setmode(GPIO.BCM)
-        GPIO.setup(self._pin, GPIO.OUT, initial=GPIO.LOW)
-        logger.info(f"[LED] status LED ready on BCM {self._pin} (physical pin 18).")
+        GPIO.setup(self._pin, GPIO.OUT, initial=off_level)
+        logger.info(
+            f"[LED] status LED ready on BCM {self._pin} (physical pin 18, "
+            f"active-{'low' if self._active_low else 'high'})."
+        )
 
         last: Optional[bool] = None
         try:
             while not self._stop.is_set():
                 level = self._level_for(self._modes.mode, time.monotonic())
                 if level != last:
-                    GPIO.output(self._pin, GPIO.HIGH if level else GPIO.LOW)
+                    GPIO.output(self._pin, on_level if level else off_level)
                     last = level
                 self._stop.wait(0.05)
         finally:
             try:
-                GPIO.output(self._pin, GPIO.LOW)
+                GPIO.output(self._pin, off_level)
             except Exception:  # noqa: BLE001
                 pass
             try:

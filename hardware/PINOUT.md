@@ -14,7 +14,7 @@ Jetson Nano 40-pin header = **J41**. Code uses **BCM** numbering
 | **12** | 18 | PTT button | in | `tts_stt/voice_config.py` → `button_pin` | active-low; STT / wake |
 | **14** | — | GND | gnd | — | shared ground rail |
 | **16** | 23 | Launch button | in | `main/boot_launcher.py` → `LAUNCH_BUTTON_PIN` | active-low; start/stop alas_main |
-| **18** | 24 | Status LED | out | `main/status_led.py` → `STATUS_LED_PIN` | active-high; mode indicator |
+| **18** | 24 | Status LED | out | `main/status_led.py` → `STATUS_LED_PIN` | **active-low** (sink); mode indicator |
 
 > GPS module also needs **VCC** (3.3 V or 5 V per module) + **GND**.
 > Navigation (A\* / VFH) is pure software — no pins of its own.
@@ -27,9 +27,15 @@ Per button: own signal pin + own **10 kΩ** pull-up. **5 wires** to the Jetson
 
 ```
 3.3V(1) ──┬──[10k]── PTT(12)        button: signal → GND when pressed (active-low)
-          └──[10k]── Launch(16)     LED:    pin18 ──[330–470Ω]──▶|── GND(20)
-GND(14) ── button commons + LED cathode
+          ├──[10k]── Launch(16)
+          └──[330–470Ω]──▶|── pin18  LED active-low: anode→3.3V, cathode→GPIO
+GND(14) ── button commons
 ```
+
+> **LED is active-low on purpose.** Jetson pins idle HIGH when undriven, so in
+> IDLE (alas_main not running) an active-high LED would stay lit. Sinking
+> current (pin LOW = on) keeps it dark in IDLE. Software matches via
+> `status_led.py` `active_low=True`.
 
 **⚠️ No debounce capacitor — do NOT add one.** An RC cap (10 k × 100 nF, ~1 ms)
 made the SoC **reset on button *release***: the slow rising edge lingers in the
