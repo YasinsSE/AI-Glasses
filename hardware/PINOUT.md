@@ -21,23 +21,57 @@ them straight:
 Both buttons are **active-low**: the line idles HIGH (pulled to 3.3 V) and goes
 LOW when pressed (connected to GND). Falling edge = press.
 
-### Per-button wiring (each button, identical pattern)
+### Two-button board — shared 3.3 V and GND rails
+
+Both buttons live on one board and **share a common 3.3 V rail and a common GND
+rail**. Shared = power + ground; per-button = its own signal pin + its own
+10 kΩ pull-up. Only **4 wires** go to the Jetson.
 
 ```
-  3.3V ──[ 10kΩ pull-up ]──┬────────────────  GPIO pin (BCM 23 or BCM 18)
-                           │
-                           ├──[ push button ]──  GND
-                           │
-                           └──[ 100nF cap ]────  GND
+3.3V (pin 1) ─────────────┬──────────────────┬─────────   ← shared 3.3V rail
+                       [10kΩ]              [10kΩ]
+                          │                   │
+PTT  (pin 12 / BCM 18) ───┤                   ├──── Launch (pin 16 / BCM 23)
+                          │                   │
+                    [PTT button]        [Launch button]
+                          │                   │
+GND  (pin 14) ────────────┴──────────────────┴─────────   ← shared GND rail
 ```
 
-- **10 kΩ pull-up to 3.3 V** — Jetson's internal pull-up (`PUD_UP`) is weak and
-  unreliable; the external resistor holds a firm idle-HIGH.
-- **100 nF (0.1 µF) ceramic cap, pin → GND** — with the 10 kΩ this forms an RC
-  low-pass filter (τ ≈ 1 ms) that absorbs contact bounce. **This is the
-  capacitor** that fixes "missed / multiple" presses — *not* a transistor.
-- Software side complements this with interrupt edge-detect + `bouncetime`
-  (`add_event_detect`), so presses are never lost between poll cycles.
+| Wire | Jetson pin |
+| :-- | :-- |
+| Shared 3.3 V (feeds both pull-ups) | pin 1 |
+| Shared GND (both buttons)          | pin 14 |
+| PTT signal                         | pin 12 (BCM 18) |
+| Launch signal                      | pin 16 (BCM 23) |
+
+- **10 kΩ pull-up to 3.3 V** per button — Jetson's internal `PUD_UP` is weak and
+  unreliable; the external resistor holds a firm idle-HIGH. (Internal `PUD_UP`
+  is left enabled in code as a harmless parallel fallback.)
+- **NO capacitor** on either button — see the warning below.
+
+### ⚠️ Why no capacitor? (hardware debounce removed — do NOT add it back)
+
+An earlier design put a 100 nF cap pin→GND for RC debounce. It made the Jetson
+**freeze and reset on button *release***. Root cause: 10 kΩ × 100 nF ≈ **1 ms**
+rise time. On release the pin voltage crawls up through the input's "undefined
+region" (~1.0–2.0 V); the Tegra X1 GPIO input has weak/no Schmitt-trigger
+hysteresis, so the input buffer's N-MOS and P-MOS conduct simultaneously (CMOS
+**shoot-through / crowbar** current) → a momentary VDD→GND short inside the SoC
+→ local brownout → reset. Removing the cap (edge now snaps via stray
+capacitance) fixed it instantly.
+
+**Debounce is therefore handled in SOFTWARE, not hardware. Exact locations:**
+
+| Button | File | Parameter(s) |
+| :-- | :-- | :-- |
+| **PTT** | `src/tts_stt/button_listener.py` → `_gpio_loop()` `GPIO.add_event_detect(..., bouncetime=…)` | `bouncetime` ← `src/tts_stt/voice_config.py` → `button_debounce_ms` (**300 ms**) |
+| **Launch** | `src/main/boot_launcher.py` | `BUTTON_DEBOUNCE_MS` (**500 ms**) + `MIN_TOGGLE_INTERVAL_SEC` (**3.0 s** cooldown) + `_confirm_press()` (`PRESS_CONFIRM_SAMPLES` = **5**) |
+
+> If hardware debounce is ever truly required, do NOT use a bare RC cap on the
+> GPIO. Use a **74HC14 Schmitt-trigger** buffer between the RC node and the pin,
+> or a much smaller cap (≤ 10 nF) so the edge clears the undefined region in
+> nanoseconds.
 
 ### Suggested power/ground pins for the buttons
 
@@ -46,8 +80,8 @@ LOW when pressed (connected to GND). Falling edge = press.
 | 3.3 V (pull-ups) | 1, 17 |
 | GND | 6, 9, 14, 20, 25, 30, 34, 39 |
 
-Recommended: **Launch** button GND = pin 14 (next to pin 16); **PTT** button
-GND = pin 20 (next to pin 12).
+For the **shared two-button board**: tap 3.3 V from **pin 1** and GND from
+**pin 14**; both buttons share those two rails (see the schematic above).
 
 ---
 
@@ -77,5 +111,6 @@ BCM 19 (pin 35), BCM 16 (pin 36), BCM 26 (pin 37), BCM 20/21.
    (`python -m main.boot_launcher` or the systemd service), press → ALAS starts;
    press again → ALAS stops (Jetson stays on); press again → ALAS restarts.
 2. **PTT button (BCM 18 / pin 12):** with ALAS in ACTIVE mode, press → hear
-   "Sizi dinliyorum." Rapid/double presses must not be lost (interrupt + RC cap).
+   "Sizi dinliyorum." Rapid/double presses must not be lost (interrupt + software
+   debounce). In STANDBY a PTT press wakes the system instead (no STT).
 3. Verify GPS still fixes — confirms UART pins 8/10 were left untouched.

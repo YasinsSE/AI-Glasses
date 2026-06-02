@@ -7,7 +7,7 @@ Wants=multi-user.target
 [Service]
 Type=simple
 
-# ─── EDIT THESE THREE LINES to match your Jetson ─────────────────────────
+# ─────────────────────────────────────────────────────────────────────────
 # User        : the account that owns the repo / venv (NOT root if avoidable).
 # WorkingDir  : the repo's  src/  directory (so `-m main.boot_launcher` resolves).
 # ExecStart   : the venv's python running the launcher module.
