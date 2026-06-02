@@ -12,8 +12,8 @@ Type=simple
 # WorkingDir  : the repo's  src/  directory (so `-m main.boot_launcher` resolves).
 # ExecStart   : the venv's python running the launcher module.
 User=alas
-WorkingDirectory=/home/alas/AI-Glasses/src
-ExecStart=/home/alas/AI-Glasses/venv/bin/python -m main.boot_launcher
+WorkingDirectory=/home/alas/ALAS_PROJECT/AI-Glasses/src
+ExecStart=/home/alas/ALAS_PROJECT/AI-Glasses/alas_env/bin/python -m main.boot_launcher
 # ─────────────────────────────────────────────────────────────────────────
 
 # GPIO access needs the 'gpio' group; audio output (TTS) needs 'audio'.
