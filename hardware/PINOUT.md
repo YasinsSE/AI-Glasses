@@ -79,7 +79,3 @@ BCM 19 (pin 35), BCM 16 (pin 36), BCM 26 (pin 37), BCM 20/21.
 2. **PTT button (BCM 18 / pin 12):** with ALAS in ACTIVE mode, press → hear
    "Sizi dinliyorum." Rapid/double presses must not be lost (interrupt + RC cap).
 3. Verify GPS still fixes — confirms UART pins 8/10 were left untouched.
-
-import Jetson.GPIO as GPIO, time
-GPIO.setmode(GPIO.BCM); GPIO.setup(23, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-while True: print(GPIO.input(23)); time.sleep(0.1)

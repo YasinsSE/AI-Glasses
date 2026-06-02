@@ -91,6 +91,11 @@ def install_signal_handlers() -> threading.Event:
     stop_event = threading.Event()
 
     def _handler(signum, _frame):
+        # Idempotent: the launcher escalates SIGINT -> SIGTERM, so a second
+        # signal during an in-progress shutdown is expected and harmless.
+        if stop_event.is_set():
+            logger.info(f"Signal {signum} ignored — shutdown already in progress.")
+            return
         logger.info(f"Shutdown signal received ({signum}).")
         stop_event.set()
 
@@ -161,6 +166,7 @@ def await_ready(
     voice,
     timeout_sec: float,
     bypass_gps: bool = False,
+    stop_event: Optional[threading.Event] = None,
 ) -> None:
     """
     Block until GPS reports a usable fix AND PerceptionService has finished
@@ -170,6 +176,12 @@ def await_ready(
 
     ``perception`` may be ``None`` (when ``--no-camera`` is set) — in that
     case the perception readiness check is skipped.
+
+    If ``stop_event`` is provided and gets set during warmup (e.g. the user
+    presses the launch button again before "SYSTEM READY"), this returns
+    immediately WITHOUT promoting to ACTIVE, so the caller can run an orderly
+    shutdown instead of being hard-killed mid-warmup (which would leave the
+    camera/engine locked for the next launch).
     """
     from navigation.sensors import GPSStatus
 
@@ -177,6 +189,10 @@ def await_ready(
     voice.announce_boot()  # idempotent — main() already called it once
 
     while time.monotonic() < deadline:
+        if stop_event is not None and stop_event.is_set():
+            logger.info("[Lifecycle] Warmup aborted by shutdown signal.")
+            return
+
         if bypass_gps:
             gps_ok = True
         else:
@@ -191,7 +207,16 @@ def await_ready(
         if gps_ok and model_ok:
             modes.transition_to(SystemMode.ACTIVE)
             return
-        time.sleep(0.5)
+
+        # Interruptible wait so a shutdown request during warmup is honoured
+        # within 0.5 s instead of after the full timeout.
+        if stop_event is not None:
+            stop_event.wait(0.5)
+        else:
+            time.sleep(0.5)
+
+    if stop_event is not None and stop_event.is_set():
+        return
 
     logger.warning("[Lifecycle] Warmup timeout — promoting to ACTIVE anyway.")
     voice.emergency("Hazırlık zaman aşımı, sınırlı modda devam ediyorum.")

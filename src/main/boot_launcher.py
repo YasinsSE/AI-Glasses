@@ -42,7 +42,10 @@ import time
 # ── Configuration ────────────────────────────────────────────────────────
 LAUNCH_BUTTON_PIN = 23      # BCM numbering — J41 physical pin 16. See hardware/PINOUT.md.
 BUTTON_DEBOUNCE_MS = 500    # Hardware switch bounce guard (complements the RC debounce).
-STOP_GRACE_SEC = 15.0       # Allow alas_main this long for an ordered shutdown.
+STOP_GRACE_SEC = 30.0       # Allow alas_main this long for an ordered shutdown
+                            # (camera + TRT teardown + TTS drain) before escalating
+                            # to SIGTERM/SIGKILL. Generous so a normal stop stays a
+                            # single clean SIGINT (no double "shutdown signal").
 
 # Defence-in-depth against a noisy/floating line (the real fix is the RC cap +
 # pull-up — see hardware/PINOUT.md):

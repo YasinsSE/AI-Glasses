@@ -131,9 +131,15 @@ def main():
             modes, gps, perception, voice,
             timeout_sec=config.warmup_timeout_sec,
             bypass_gps=config.bypass_gps_warmup,
+            stop_event=stop_event,
         )
-    voice.announce_ready()
-    logger.info("[Main] ======== ALAS SYSTEM READY ========")
+
+    # If the user pressed the launch button during warmup, stop_event is now
+    # set: skip the "ready" announcement and fall straight through to an
+    # orderly shutdown instead of going ACTIVE for a split second.
+    if not stop_event.is_set():
+        voice.announce_ready()
+        logger.info("[Main] ======== ALAS SYSTEM READY ========")
 
     # 8. Idle until SIGINT / SIGTERM.
     lifecycle.wait_for_shutdown(
