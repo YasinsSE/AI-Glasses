@@ -47,6 +47,30 @@ def _resolve_repo(path: str) -> str:
 
 
 @dataclass
+class IdleConfig:
+    """Automatic power-saving STANDBY detection (see main/activity_monitor.py).
+
+    The monitor fuses motion evidence from pluggable sources (visual frame-diff,
+    GPS speed/displacement, and — in the future — an MPU9250 IMU) and, after
+    sustained inactivity, drops the system into STANDBY (``SystemMode.SLEEP``) so
+    the camera and U-Net inference shut down to save LiPo battery. Wake-up is via
+    the PTT button.
+    """
+    enabled: bool = False                 # --auto-standby. Off until field-tested.
+    idle_enter_sec: float = 90.0          # Sustained no-motion before STANDBY.
+    poll_interval_sec: float = 1.0        # Monitor evaluation cadence.
+    # Visual stillness: mean absolute frame-diff (0..255) below this == "still".
+    visual_motion_threshold: float = 2.5
+    # GPS motion: speed at/above this (km/h) OR displacement past the radius == moving.
+    gps_moving_kmh: float = 1.5
+    gps_stationary_radius_m: float = 8.0
+    # Ignore a source reading older than this many seconds (treat as "no data").
+    source_stale_sec: float = 5.0
+    # Optional short WAV played on PTT wake (empty == spoken cue only).
+    wake_cue_wav: str = ""
+
+
+@dataclass
 class RecorderConfig:
     """Tunables for the field-test black-box recorder (see session_recorder.py)."""
     overlay_jpeg_quality: int = 65       # cv2 JPEG quality for saved overlays (lower = smaller/faster).
@@ -65,6 +89,7 @@ class ALASConfig:
     gps: GPSConfig = field(default_factory=GPSConfig)
     nav: NavConfig = field(default_factory=NavConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
+    idle: IdleConfig = field(default_factory=IdleConfig)
 
     # ── Cross-cutting paths ──────────────────────────────────────
     osm_map_path: str = "navigation/router/map.osm"
@@ -110,6 +135,8 @@ class ALASConfig:
                             help="Enable the field-test black-box recorder")
         parser.add_argument("--live", action="store_true",
                             help="Print a one-line live status dashboard to stdout")
+        parser.add_argument("--auto-standby", action="store_true",
+                            help="Enable automatic power-saving STANDBY on sustained inactivity")
         args = parser.parse_args(argv)
 
         config = cls()
@@ -133,6 +160,7 @@ class ALASConfig:
         config.bypass_gps_warmup = args.bypass_gps_warmup
         config.record = args.record
         config.live = args.live
+        config.idle.enabled = args.auto_standby
 
         # Anchor relative paths so the entry point can be invoked from any
         # working directory.

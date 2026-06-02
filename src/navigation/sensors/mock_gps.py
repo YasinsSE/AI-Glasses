@@ -19,9 +19,15 @@ logger = logging.getLogger("ALAS.mock_gps")
 class MockGPSReader:
     """Always returns the same coordinate. Use only with ``--mock``."""
 
-    def __init__(self, lat: float = 39.9245, lon: float = 32.8465) -> None:
+    def __init__(
+        self,
+        lat: float = 39.9245,
+        lon: float = 32.8465,
+        speed_kmh: float = 0.0,
+    ) -> None:
         self._lat = lat
         self._lon = lon
+        self._speed_kmh = speed_kmh  # 0.0 == stationary (exercises auto-STANDBY).
 
     def start(self) -> None:
         logger.info(f"[MockGPS] Fixed position: ({self._lat}, {self._lon})")
@@ -31,6 +37,9 @@ class MockGPSReader:
 
     def get_coord(self) -> Optional[Tuple[float, float, float]]:
         return (self._lat, self._lon, 0.0)
+
+    def get_speed_kmh(self) -> float:
+        return self._speed_kmh
 
     def get_utc(self) -> Optional[Tuple[datetime, float]]:
         # The desktop clock is trustworthy under --mock, so expose it as the

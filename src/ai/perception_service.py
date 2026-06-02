@@ -37,6 +37,7 @@ class PerceptionService(threading.Thread):
         nav=None,
         vfh: Optional[VFHPlanner] = None,
         recorder=None,
+        monitor=None,
     ) -> None:
         super().__init__(name="PerceptionService", daemon=True)
         self._config = config
@@ -45,6 +46,8 @@ class PerceptionService(threading.Thread):
         self._stop_event = stop_event
         self._nav = nav  # NavigationSystem reference for crosswalk filtering.
         self._vfh = vfh  # Optional local planner; None disables VFH guidance.
+        self._monitor = monitor  # ActivityMonitor (auto-STANDBY) or None.
+        self._prev_gray = None    # last downscaled grayscale frame (visual motion).
         from main.session_recorder import NullRecorder
         self._rec = recorder or NullRecorder()  # field-test black-box recorder
 
@@ -116,6 +119,10 @@ class PerceptionService(threading.Thread):
                     "[Perception] Cannot open CSI camera via GStreamer. "
                     "Check `gst-launch-1.0 nvarguscamerasrc` works standalone."
                 )
+                try:
+                    cap.release()  # free the partial handle before a retry
+                except Exception:
+                    pass
                 return False
             logger.info(
                 "[Perception] CSI camera opened (sensor-id=%d) — capture %dx%d, "
@@ -141,6 +148,10 @@ class PerceptionService(threading.Thread):
 
         if not cap.isOpened():
             logger.error("[Perception] Cannot open camera.")
+            try:
+                cap.release()  # free the partial handle before a retry
+            except Exception:
+                pass
             return False
 
         try:
@@ -169,6 +180,31 @@ class PerceptionService(threading.Thread):
             return None
         return frame
 
+    def _acquire_camera(self) -> bool:
+        """Open the camera with retries.
+
+        After a deep-STANDBY wake the OS may not have fully released the camera
+        device yet (true for both USB UVC and the CSI/Argus stack on Jetson), so
+        the first ``VideoCapture`` can fail to lock it. We retry a few times with
+        a short delay and a settle pause on success, so the PTT wake recovers
+        gracefully instead of dying.
+        """
+        attempts = 4
+        delay = 1.0
+        for i in range(attempts):
+            if self._stop_event.is_set():
+                return False
+            if self._open_camera():
+                # Let the device settle before the first read().
+                self._stop_event.wait(0.3)
+                return True
+            logger.warning(
+                "[Perception] camera open attempt %d/%d failed; retrying in %.1fs.",
+                i + 1, attempts, delay,
+            )
+            self._stop_event.wait(delay)
+        return False
+
     def _release_camera(self) -> None:
         if self._cap is not None:
             try:
@@ -176,6 +212,26 @@ class PerceptionService(threading.Thread):
             except Exception:
                 logger.exception("[Perception] camera release failed")
             self._cap = None
+
+    def _visual_motion_metric(self, frame) -> Optional[float]:
+        """Mean absolute frame-diff (0..255) vs the previous frame.
+
+        Cheap stillness signal for the auto-STANDBY monitor: downscale to
+        64x48 grayscale and average the per-pixel delta. Returns None on the
+        first frame (no baseline yet) or on error.
+        """
+        try:
+            import cv2
+            import numpy as np
+            small = cv2.resize(frame, (64, 48))
+            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            prev = self._prev_gray
+            self._prev_gray = gray
+            if prev is None or prev.shape != gray.shape:
+                return None
+            return float(np.mean(cv2.absdiff(gray, prev)))
+        except Exception:  # noqa: BLE001
+            return None
 
     # ── Thread entry point ───────────────────────────────────────
 
@@ -198,11 +254,9 @@ class PerceptionService(threading.Thread):
             self.model_ready.set()  # Unblock await_ready so the user is not stuck.
             return
 
-        if not self._open_camera():
-            self._voice.emergency("Kamera açılamadı.")
-            self.model_ready.set()
-            return
-
+        # The camera is opened lazily by the loop on the first ACTIVE iteration
+        # (and re-opened after each deep-STANDBY wake), so model readiness no
+        # longer blocks on it. This keeps a single camera-acquire code path.
         self.model_ready.set()
         logger.info(
             "[Perception] Pipeline ready — target ~%.1f FPS",
@@ -243,8 +297,27 @@ class PerceptionService(threading.Thread):
 
             # Mode gate — skip in WARMUP / SLEEP / SHUTDOWN.
             if self._modes.mode != SystemMode.ACTIVE:
+                # Deep STANDBY: fully close the camera to save power. Inference
+                # is already idle here; releasing the device is the extra win.
+                if self._cap is not None:
+                    logger.info("[Perception] STANDBY — releasing camera to save power.")
+                    self._release_camera()
+                    self._prev_gray = None
                 self._stop_event.wait(0.2)
                 continue
+
+            # ACTIVE: ensure the camera is open. After a PTT wake from deep
+            # STANDBY this re-acquires the device (with retries).
+            if self._cap is None:
+                logger.info("[Perception] Waking — acquiring camera.")
+                if not self._acquire_camera():
+                    self._voice.emergency("Kamera açılamadı, tekrar deneniyor.")
+                    self._stop_event.wait(1.0)
+                    continue
+                self._reset_situation()
+                if self._pipeline is not None:
+                    self._pipeline.reset_cooldowns()
+                self._prev_gray = None
 
             # Active-utterance gate — wait on the event so we wake the instant
             # the priority utterance ends, instead of polling at 5 Hz.
@@ -263,6 +336,12 @@ class PerceptionService(threading.Thread):
             if frame is None:
                 self._stop_event.wait(0.2)
                 continue
+
+            # Feed the auto-STANDBY monitor with a visual-stillness sample.
+            if self._monitor is not None:
+                metric = self._visual_motion_metric(frame)
+                if metric is not None:
+                    self._monitor.report_visual(metric)
 
             try:
                 result = self._pipeline.process(frame)

@@ -141,6 +141,9 @@ class GPSReader:
         self._start_time: float = 0.0
         self._serial_ok: bool = False
         self._last_fix_time: float = 0.0
+        # Latest ground speed (km/h) from the RMC sentence. Used by the
+        # auto-STANDBY activity monitor as a near-free "are we moving?" signal.
+        self._last_speed_kmh: float = 0.0
 
         # Satellite UTC datetime from the NMEA RMC sentence, paired with the
         # monotonic instant it was captured. Used as a trustworthy absolute-time
@@ -231,6 +234,11 @@ class GPSReader:
             return None
 
         return (coord[0], coord[1], age_sec)
+
+    def get_speed_kmh(self) -> float:
+        """Latest RMC ground speed in km/h (0.0 if none seen yet)."""
+        with self._lock:
+            return self._last_speed_kmh
 
     def get_health(self) -> GPSHealth:
         now = time.monotonic()
@@ -384,6 +392,9 @@ class GPSReader:
             speed = float(p[7]) * 1.852 if p[7] else 0.0
         except ValueError:
             speed = 0.0
+
+        with self._lock:
+            self._last_speed_kmh = speed
 
         with self._lock:
             current_sats = self._confirmed_meta["sats"]

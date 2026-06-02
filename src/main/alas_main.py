@@ -36,6 +36,7 @@ if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
 from main import lifecycle
+from main.activity_monitor import ActivityMonitor
 from main.config import ALASConfig
 from main.lifecycle import SystemMode
 from main.logging_config import configure_logging
@@ -81,12 +82,20 @@ def main():
     # plain path_guidance.
     vfh = VFHPlanner(config) if config.vfh.enabled else None
 
+    # Auto-STANDBY power saver. Disabled unless --auto-standby; when disabled its
+    # report_* hooks are cheap no-ops and start() does nothing.
+    monitor = ActivityMonitor(config, modes, voice, stop_event)
+    monitor.set_nav(nav)
+
     perception = (
         None if config.no_camera
-        else PerceptionService(config, voice, modes, stop_event, nav=nav, vfh=vfh, recorder=recorder)
+        else PerceptionService(config, voice, modes, stop_event, nav=nav, vfh=vfh,
+                               recorder=recorder, monitor=monitor)
     )
-    navigation = NavigationService(config, nav, gps, voice, modes, stop_event, recorder=recorder)
-    commands = VoiceCommandHandler(config, nav, gps, None, voice, modes, stop_event, recorder=recorder)
+    navigation = NavigationService(config, nav, gps, voice, modes, stop_event,
+                                   recorder=recorder, monitor=monitor)
+    commands = VoiceCommandHandler(config, nav, gps, None, voice, modes, stop_event,
+                                   recorder=recorder, monitor=monitor)
 
     def _load_and_attach_stt():
         try:
@@ -111,6 +120,7 @@ def main():
         perception.start()
     navigation.start()
     button.start()
+    monitor.start()  # no-op unless --auto-standby
 
     # 7. Wait for sensors/model warmup before transitioning to ACTIVE.
     if config.bypass_warmup:
@@ -135,7 +145,7 @@ def main():
     # 9. Graceful shutdown — stop services, release sensors, drain TTS.
     lifecycle.shutdown(
         button=button,
-        services=[perception, navigation],
+        services=[perception, navigation, monitor],
         nav=nav,
         gps=gps,
         voice=voice,

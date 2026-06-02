@@ -48,6 +48,7 @@ class NavigationService(threading.Thread):
         modes: ModeManager,
         stop_event: threading.Event,
         recorder=None,
+        monitor=None,
     ) -> None:
         super().__init__(name="NavigationService", daemon=True)
         self._config = config
@@ -56,6 +57,7 @@ class NavigationService(threading.Thread):
         self._voice = voice
         self._modes = modes
         self._stop_event = stop_event
+        self._monitor = monitor  # ActivityMonitor (auto-STANDBY) or None.
         from main.session_recorder import NullRecorder
         self._rec = recorder or NullRecorder()  # field-test black-box recorder
 
@@ -80,19 +82,23 @@ class NavigationService(threading.Thread):
                 idle_fix = self._gps.get_coord()
                 if idle_fix is not None:
                     self._record_gps(*idle_fix)
+                    self._report_activity((idle_fix[0], idle_fix[1]))
                 else:
                     self._log_gps_state()
+                    self._report_activity(None)
                 self._stop_event.wait(self._config.gps.update_interval)
                 continue
 
             fix = self._gps.get_coord()
             if fix is None:
                 self._log_gps_state()
+                self._report_activity(None)
                 self._stop_event.wait(self._config.gps.update_interval)
                 continue
 
             lat, lon, age = fix
             self._record_gps(lat, lon, age)
+            self._report_activity((lat, lon))
             if age > self._config.gps.stale_threshold_sec:
                 if not self._stale_announced:
                     self._voice.say_nav("GPS sinyali zayıf, konum güncellenemiyor.")
@@ -113,6 +119,20 @@ class NavigationService(threading.Thread):
         logger.info("[Navigation] Stopped.")
 
     # ── Announcement logic ───────────────────────────────────────
+
+    def _report_activity(self, coord) -> None:
+        """Feed the auto-STANDBY monitor with GPS speed/displacement + health."""
+        if self._monitor is None:
+            return
+        try:
+            speed = self._gps.get_speed_kmh()
+        except Exception:  # noqa: BLE001
+            speed = None
+        try:
+            health = self._gps.get_health()
+        except Exception:  # noqa: BLE001
+            health = None
+        self._monitor.report_gps(speed, coord, health)
 
     def _record_gps(self, lat: float, lon: float, age: float) -> None:
         """Log the GPS fix and (once) anchor absolute time from satellite UTC."""

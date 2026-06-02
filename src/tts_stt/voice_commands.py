@@ -69,6 +69,7 @@ class VoiceCommandHandler:
         modes,           # ModeManager
         stop_event,      # threading.Event
         recorder=None,   # SessionRecorder or None
+        monitor=None,    # ActivityMonitor (auto-STANDBY) or None
     ):
         self._config = config
         self._nav = nav
@@ -77,6 +78,7 @@ class VoiceCommandHandler:
         self._voice = voice
         self._modes = modes
         self._stop = stop_event
+        self._monitor = monitor
         from main.session_recorder import NullRecorder
         self._rec = recorder or NullRecorder()  # field-test black-box recorder
 
@@ -91,9 +93,13 @@ class VoiceCommandHandler:
         if self._stop.is_set():
             return
 
-        # SLEEP wake -- consume the press, no STT session.
+        # STANDBY (SLEEP) wake -- consume the press as a wake event, NOT an STT
+        # session. The perception loop re-acquires the camera on the ACTIVE
+        # transition; announce_wake() plays the wake-up cue.
         if self._modes.mode == SystemMode.SLEEP:
             self._modes.transition_to(SystemMode.ACTIVE)
+            if self._monitor is not None:
+                self._monitor.notify_wake()  # reset idle timer so we don't re-sleep
             self._voice.announce_wake()
             return
 

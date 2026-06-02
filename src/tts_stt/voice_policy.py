@@ -63,8 +63,29 @@ class VoicePolicy:
         self._rec.log_speak("announce", "Uyku moduna geçiliyor.", True)
 
     def announce_wake(self) -> None:
+        # Optional short audio cue (WAV) before the spoken confirmation, so the
+        # user gets immediate feedback that the PTT press woke the system.
+        wav = getattr(getattr(self._cfg, "idle", None), "wake_cue_wav", "")
+        if wav:
+            self._play_wake_cue(wav)
         self._priority_speak("Sistem aktif.")
         self._rec.log_speak("announce", "Sistem aktif.", True)
+
+    @staticmethod
+    def _play_wake_cue(path: str) -> None:
+        """Play a short WAV via aplay (non-blocking). Silently no-ops on failure."""
+        import os
+        import subprocess
+        if not path or not os.path.isfile(path):
+            return
+        try:
+            subprocess.Popen(
+                ["aplay", path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("[Voice] wake cue playback failed", exc_info=True)
 
     def emergency(self, text: str) -> None:
         self._priority_speak(text)
