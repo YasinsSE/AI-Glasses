@@ -35,9 +35,16 @@ _SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
+# Quieten GStreamer/OpenCV native chatter so the journal stays in one ALAS log
+# format. MUST be set before the camera stack (cv2 / nvarguscamerasrc) loads, so
+# it lives here above the imports. (The verbose GST_ARGUS sensor-mode dump is a
+# separate native print, muted around the camera open in perception_service.)
+os.environ.setdefault("GST_DEBUG", "0")
+
 from main import lifecycle
 from main.activity_monitor import ActivityMonitor
 from main.config import ALASConfig
+from main.status_led import StatusLED
 from main.lifecycle import SystemMode
 from main.logging_config import configure_logging
 from main.session_recorder import build_recorder
@@ -116,11 +123,16 @@ def main():
         mock=config.mock or config.mock_button,
     )
 
+    # Mode-indicator LED (BCM 24 / pin 18): blink=WARMUP, solid=ACTIVE,
+    # heartbeat=STANDBY, off=stopping. Driven here because alas_main owns the mode.
+    status_led = StatusLED(modes, stop_event, mock=config.mock)
+
     if perception is not None:
         perception.start()
     navigation.start()
     button.start()
     monitor.start()  # no-op unless --auto-standby
+    status_led.start()
 
     # 7. Wait for sensors/model warmup before transitioning to ACTIVE.
     if config.bypass_warmup:
@@ -151,7 +163,7 @@ def main():
     # 9. Graceful shutdown — stop services, release sensors, drain TTS.
     lifecycle.shutdown(
         button=button,
-        services=[perception, navigation, monitor],
+        services=[perception, navigation, monitor, status_led],
         nav=nav,
         gps=gps,
         voice=voice,

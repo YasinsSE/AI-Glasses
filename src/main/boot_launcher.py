@@ -63,12 +63,15 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))   # .../src/main
 SRC_DIR = os.path.dirname(_THIS_DIR)                      # .../src
 
 # The command alas_main is launched with. TEST configuration for now
-# (--bypass-stt --record); edit this single list once field tests finish.
+# (--bypass-stt --record --auto-standby); edit this single list once field
+# tests finish. --auto-standby enables the power-saving STANDBY: after
+# ~idle_enter_sec of stillness the camera/inference shut down (PTT wakes it).
 LAUNCH_CMD = [
     sys.executable, "-m", "main.alas_main",
     "--model", "models/segmentation/alas_engine.trt",
     "--bypass-stt",
     "--record",
+    "--auto-standby",
 ]
 
 logger = logging.getLogger("ALAS.launcher")

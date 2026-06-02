@@ -1,116 +1,68 @@
-# ALAS — Jetson Nano Pin Map (Single Source of Truth)
+# ALAS — Jetson Nano Pin Map
 
-Jetson Nano 40-pin header = **J41**. Two numbering schemes appear below — keep
-them straight:
+Jetson Nano 40-pin header = **J41**. Code uses **BCM** numbering
+(`GPIO.setmode(GPIO.BCM)`); you wire by **physical** pin — they differ
+(e.g. **BCM 23 = physical pin 16**). Wire by the *Physical* column.
 
-- **BCM** — what the code uses (`GPIO.setmode(GPIO.BCM)`).
-- **Physical (J41)** — the actual pin you plug a wire into (1–40).
+## Connections
 
-> ⚠️ **BCM ≠ physical.** "BCM 23" is **physical pin 16** — it is *not* physical
-> pin 23 (that pin is an SPI line). Always wire by the **Physical** column.
+| Physical | BCM | Signal | Dir | Code reference | Note |
+| :-: | :-: | :-- | :-: | :-- | :-- |
+| **1** | — | 3.3 V | pwr | — | shared pull-up rail |
+| **8** | 14 | GPS UART TX → GPS RX | out | `navigation/sensors/sensor_config.py` | `/dev/ttyTHS1` @ 9600 |
+| **10** | 15 | GPS UART RX ← GPS TX | in | ″ | **TX/RX crossed** |
+| **12** | 18 | PTT button | in | `tts_stt/voice_config.py` → `button_pin` | active-low; STT / wake |
+| **14** | — | GND | gnd | — | shared ground rail |
+| **16** | 23 | Launch button | in | `main/boot_launcher.py` → `LAUNCH_BUTTON_PIN` | active-low; start/stop alas_main |
+| **18** | 24 | Status LED | out | `main/status_led.py` → `STATUS_LED_PIN` | active-high; mode indicator |
 
----
+> GPS module also needs **VCC** (3.3 V or 5 V per module) + **GND**.
+> Navigation (A\* / VFH) is pure software — no pins of its own.
 
-## Buttons
+## Button + LED board
 
-| Function | BCM | Physical pin | Logic | Code reference |
-| :-- | :-: | :-: | :-- | :-- |
-| **Launch button** (boot/standby toggle) | **23** | **16** | active-low, pull-up | `src/main/boot_launcher.py` → `LAUNCH_BUTTON_PIN` |
-| **PTT button** (push-to-talk / STT) | **18** | **12** | active-low, pull-up | `src/tts_stt/voice_config.py` → `button_pin` |
-
-Both buttons are **active-low**: the line idles HIGH (pulled to 3.3 V) and goes
-LOW when pressed (connected to GND). Falling edge = press.
-
-### Two-button board — shared 3.3 V and GND rails
-
-Both buttons live on one board and **share a common 3.3 V rail and a common GND
-rail**. Shared = power + ground; per-button = its own signal pin + its own
-10 kΩ pull-up. Only **4 wires** go to the Jetson.
+Two buttons + LED on one board, sharing 3.3 V (pin 1) and GND (pin 14).
+Per button: own signal pin + own **10 kΩ** pull-up. **5 wires** to the Jetson
+(3.3 V, GND, PTT, Launch, LED).
 
 ```
-3.3V (pin 1) ─────────────┬──────────────────┬─────────   ← shared 3.3V rail
-                       [10kΩ]              [10kΩ]
-                          │                   │
-PTT  (pin 12 / BCM 18) ───┤                   ├──── Launch (pin 16 / BCM 23)
-                          │                   │
-                    [PTT button]        [Launch button]
-                          │                   │
-GND  (pin 14) ────────────┴──────────────────┴─────────   ← shared GND rail
+3.3V(1) ──┬──[10k]── PTT(12)        button: signal → GND when pressed (active-low)
+          └──[10k]── Launch(16)     LED:    pin18 ──[330–470Ω]──▶|── GND(20)
+GND(14) ── button commons + LED cathode
 ```
 
-| Wire | Jetson pin |
-| :-- | :-- |
-| Shared 3.3 V (feeds both pull-ups) | pin 1 |
-| Shared GND (both buttons)          | pin 14 |
-| PTT signal                         | pin 12 (BCM 18) |
-| Launch signal                      | pin 16 (BCM 23) |
+**⚠️ No debounce capacitor — do NOT add one.** An RC cap (10 k × 100 nF, ~1 ms)
+made the SoC **reset on button *release***: the slow rising edge lingers in the
+input's undefined region and triggers CMOS shoot-through on the Tegra X1 GPIO
+buffer → brownout → reset. Debounce is done in **software** instead:
 
-- **10 kΩ pull-up to 3.3 V** per button — Jetson's internal `PUD_UP` is weak and
-  unreliable; the external resistor holds a firm idle-HIGH. (Internal `PUD_UP`
-  is left enabled in code as a harmless parallel fallback.)
-- **NO capacitor** on either button — see the warning below.
-
-### ⚠️ Why no capacitor? (hardware debounce removed — do NOT add it back)
-
-An earlier design put a 100 nF cap pin→GND for RC debounce. It made the Jetson
-**freeze and reset on button *release***. Root cause: 10 kΩ × 100 nF ≈ **1 ms**
-rise time. On release the pin voltage crawls up through the input's "undefined
-region" (~1.0–2.0 V); the Tegra X1 GPIO input has weak/no Schmitt-trigger
-hysteresis, so the input buffer's N-MOS and P-MOS conduct simultaneously (CMOS
-**shoot-through / crowbar** current) → a momentary VDD→GND short inside the SoC
-→ local brownout → reset. Removing the cap (edge now snaps via stray
-capacitance) fixed it instantly.
-
-**Debounce is therefore handled in SOFTWARE, not hardware. Exact locations:**
-
-| Button | File | Parameter(s) |
+| Button | File | Parameter |
 | :-- | :-- | :-- |
-| **PTT** | `src/tts_stt/button_listener.py` → `_gpio_loop()` `GPIO.add_event_detect(..., bouncetime=…)` | `bouncetime` ← `src/tts_stt/voice_config.py` → `button_debounce_ms` (**300 ms**) |
-| **Launch** | `src/main/boot_launcher.py` | `BUTTON_DEBOUNCE_MS` (**500 ms**) + `MIN_TOGGLE_INTERVAL_SEC` (**3.0 s** cooldown) + `_confirm_press()` (`PRESS_CONFIRM_SAMPLES` = **5**) |
+| PTT | `tts_stt/button_listener.py` (`add_event_detect` `bouncetime`) | `voice_config.button_debounce_ms` = **300 ms** |
+| Launch | `main/boot_launcher.py` | `BUTTON_DEBOUNCE_MS` **500 ms** + `MIN_TOGGLE_INTERVAL_SEC` **3 s** + `_confirm_press()` |
 
-> If hardware debounce is ever truly required, do NOT use a bare RC cap on the
-> GPIO. Use a **74HC14 Schmitt-trigger** buffer between the RC node and the pin,
-> or a much smaller cap (≤ 10 nF) so the edge clears the undefined region in
-> nanoseconds.
+> If HW debounce is ever needed: a **74HC14 Schmitt** buffer or a **≤10 nF** cap —
+> never a bare RC cap on the GPIO. Jetson GPIO drive is low: keep LED ≤ 5 mA or
+> use a transistor.
 
-### Suggested power/ground pins for the buttons
+**Status LED patterns:** off = IDLE · blink = WARMUP · solid = ACTIVE ·
+heartbeat = STANDBY · off = stopping.
 
-| Use | Physical pins |
-| :-- | :-- |
-| 3.3 V (pull-ups) | 1, 17 |
-| GND | 6, 9, 14, 20, 25, 30, 34, 39 |
+## Reserved — do not repurpose
 
-For the **shared two-button board**: tap 3.3 V from **pin 1** and GND from
-**pin 14**; both buttons share those two rails (see the schematic above).
+UART **8 / 10** (GPS) · I²C **3 / 5** (+ EEPROM 27/28) · SPI **19/21/23/24/26** ·
+power **1 / 2 / 4 / 17** · GND **6/9/14/20/25/30/34/39**.
 
----
+## Quick test
 
-## Reserved / in-use — DO NOT repurpose
+1. **Launch (pin 16):** press → starts (LED off→blink→solid); press → stops (Jetson stays on, LED off).
+2. **PTT (pin 12):** ACTIVE → "Sizi dinliyorum"; STANDBY → wakes (no STT). Rapid presses must not be lost.
+3. **LED (pin 18):** tracks mode (see patterns above).
+4. **GPS** still gets a fix → UART 8/10 untouched.
 
-| Function | Physical pins | Notes |
-| :-- | :-- | :-- |
-| **GPS UART** (`/dev/ttyTHS1`) | 8 (TXD), 10 (RXD) | `src/navigation/sensors/sensor_config.py` |
-| I²C (bus 1) | 3 (SDA), 5 (SCL) | + ID-EEPROM on 27/28 |
-| SPI | 19, 21, 23, 24, 26 | physical pin 23 = SPI CLK |
-| Power | 1 (3.3V), 2/4 (5V), 17 (3.3V) | |
-| GND | 6, 9, 14, 20, 25, 30, 34, 39 | |
-
----
-
-## Free GPIO (for future peripherals)
-
-BCM 4 (pin 7), BCM 17 (pin 11), BCM 27 (pin 13), BCM 22 (pin 15),
-BCM 24 (pin 18), BCM 10/9/25/11/8/7, BCM 12 (pin 32), BCM 13 (pin 33),
-BCM 19 (pin 35), BCM 16 (pin 36), BCM 26 (pin 37), BCM 20/21.
-
----
-
-## Quick test checklist
-
-1. **Launch button (BCM 23 / pin 16):** with the launcher running
-   (`python -m main.boot_launcher` or the systemd service), press → ALAS starts;
-   press again → ALAS stops (Jetson stays on); press again → ALAS restarts.
-2. **PTT button (BCM 18 / pin 12):** with ALAS in ACTIVE mode, press → hear
-   "Sizi dinliyorum." Rapid/double presses must not be lost (interrupt + software
-   debounce). In STANDBY a PTT press wakes the system instead (no STT).
-3. Verify GPS still fixes — confirms UART pins 8/10 were left untouched.
+```python
+# Quick pin-level check (idle should read 1, pressed 0; no flicker):
+import Jetson.GPIO as GPIO, time
+GPIO.setmode(GPIO.BCM); GPIO.setup(23, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+while True: print(GPIO.input(23)); time.sleep(0.1)
+```

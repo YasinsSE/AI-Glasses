@@ -4,7 +4,9 @@ Runs PerceptionPipeline at a fixed FPS and routes alerts through VoicePolicy.
 Loop is gated on system mode, active TTS, and post-nav silence window.
 """
 
+import contextlib
 import logging
+import os
 import threading
 import time
 from typing import Optional
@@ -17,6 +19,32 @@ from navigation.local_planner import VFHPlanner
 from tts_stt.voice_policy import VoicePolicy
 
 logger = logging.getLogger("ALAS.perception_service")
+
+
+@contextlib.contextmanager
+def _silence_native_stdio():
+    """Mute C-level stdout+stderr for the duration of the block.
+
+    The NVIDIA Argus camera stack (``GST_ARGUS:`` / ``CONSUMER:`` sensor-mode
+    dump) and OpenCV's GStreamer backend print verbose native messages straight
+    to file descriptors 1/2 — bypassing Python logging — every time the CSI
+    camera opens (and on every wake from STANDBY). We swallow only that short
+    window so the journal stays in the single ALAS log format. Python-level
+    open failures are still detected via ``cap.isOpened()`` and logged normally.
+    """
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    saved_out, saved_err = os.dup(1), os.dup(2)
+    try:
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        yield
+    finally:
+        os.dup2(saved_out, 1)
+        os.dup2(saved_err, 2)
+        os.close(devnull)
+        os.close(saved_out)
+        os.close(saved_err)
+
 
 # Average sustained FPS over this many frames before logging it.
 _FPS_LOG_WINDOW = 30
@@ -113,8 +141,11 @@ class PerceptionService(threading.Thread):
         # CSI sensors need the Argus pipeline; v4l2 (index) only serves USB UVC.
         if ai.use_csi_camera:
             pipeline = self._build_csi_pipeline()
-            cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
-            if not cap.isOpened():
+            # Mute the native Argus/GStreamer sensor-mode dump during open.
+            with _silence_native_stdio():
+                cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+                opened = cap.isOpened()
+            if not opened:
                 logger.error(
                     "[Perception] Cannot open CSI camera via GStreamer. "
                     "Check `gst-launch-1.0 nvarguscamerasrc` works standalone."
@@ -133,8 +164,9 @@ class PerceptionService(threading.Thread):
             self._cap = cap
             return True
 
-        # --- USB UVC path (unchanged) -------------------------------------
-        cap = cv2.VideoCapture(ai.camera_index)
+        # --- USB UVC path -------------------------------------------------
+        with _silence_native_stdio():
+            cap = cv2.VideoCapture(ai.camera_index)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, ai.camera_width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, ai.camera_height)
         try:
