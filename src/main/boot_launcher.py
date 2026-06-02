@@ -37,11 +37,23 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 # ── Configuration ────────────────────────────────────────────────────────
 LAUNCH_BUTTON_PIN = 23      # BCM numbering — J41 physical pin 16. See hardware/PINOUT.md.
-BUTTON_DEBOUNCE_MS = 300    # Hardware switch bounce guard (complements the RC debounce).
+BUTTON_DEBOUNCE_MS = 500    # Hardware switch bounce guard (complements the RC debounce).
 STOP_GRACE_SEC = 15.0       # Allow alas_main this long for an ordered shutdown.
+
+# Defence-in-depth against a noisy/floating line (the real fix is the RC cap +
+# pull-up — see hardware/PINOUT.md):
+#   * MIN_TOGGLE_INTERVAL_SEC: ignore any press within this window of the last
+#     action, so phantom double-edges can't start-then-instantly-kill ALAS and
+#     thrash the Jetson.
+#   * PRESS_CONFIRM_SAMPLES/_GAP: a real press holds the line LOW; require it to
+#     read LOW across several samples before acting, rejecting transient spikes.
+MIN_TOGGLE_INTERVAL_SEC = 3.0
+PRESS_CONFIRM_SAMPLES = 5
+PRESS_CONFIRM_GAP_SEC = 0.01
 
 # Directory that ``python -m main.alas_main`` must run from (the src/ root).
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))   # .../src/main
@@ -66,6 +78,8 @@ class LaunchWatcher:
         self._proc = None                  # subprocess.Popen or None
         self._press = threading.Event()    # flagged by the GPIO ISR
         self._stop = threading.Event()     # flagged by SIGINT/SIGTERM (systemd stop)
+        self._last_action = 0.0            # monotonic time of last start/stop toggle
+        self._gpio = None                  # set in run() — used by _confirm_press
 
     # ── GPIO ISR (background C-thread — keep trivial) ────────────────────
     def _on_edge(self, channel) -> None:
@@ -125,6 +139,17 @@ class LaunchWatcher:
             except subprocess.TimeoutExpired:
                 continue
 
+    # ── Press validation (noise rejection) ───────────────────────────────
+    def _confirm_press(self) -> bool:
+        """A real press holds the line LOW; reject transient spikes/noise."""
+        if self._gpio is None:
+            return True
+        for _ in range(PRESS_CONFIRM_SAMPLES):
+            if self._gpio.input(LAUNCH_BUTTON_PIN) != self._gpio.LOW:
+                return False
+            time.sleep(PRESS_CONFIRM_GAP_SEC)
+        return True
+
     # ── Main loop ────────────────────────────────────────────────────────
     def run(self) -> None:
         try:
@@ -133,6 +158,7 @@ class LaunchWatcher:
             logger.exception("Jetson.GPIO unavailable — launcher cannot run.")
             return
 
+        self._gpio = GPIO
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(LAUNCH_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         try:
@@ -153,10 +179,20 @@ class LaunchWatcher:
             while not self._stop.is_set():
                 if self._press.wait(timeout=1.0):
                     self._press.clear()
+                    now = time.monotonic()
+                    # Cooldown: ignore presses too soon after the last toggle.
+                    # Kills the start-then-instant-kill thrash from noisy edges.
+                    if (now - self._last_action) < MIN_TOGGLE_INTERVAL_SEC:
+                        continue
+                    # Reject phantom edges that did not settle into a real press.
+                    if not self._confirm_press():
+                        logger.debug("Ignoring unconfirmed (noise) edge on BCM %d.", LAUNCH_BUTTON_PIN)
+                        continue
                     if self._is_running():
                         self._terminate()
                     else:
                         self._spawn()
+                    self._last_action = time.monotonic()
                     # Drop any bounce-queued extra press fired during the action.
                     self._press.clear()
                 elif self._proc is not None and self._proc.poll() is not None:
