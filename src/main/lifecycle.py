@@ -214,9 +214,9 @@ def await_ready(
             return
 
         # Throttled progress so the operator can see WHAT is blocking (e.g. an
-        # indoor run stuck on a GPS fix) instead of a silent 90 s wait.
+        # indoor run stuck on a GPS fix) instead of a silent wait.
         now = time.monotonic()
-        if now - last_progress >= 5.0:
+        if now - last_progress >= 10.0:
             last_progress = now
             pending = []
             if not gps_ok:

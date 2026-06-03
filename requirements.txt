@@ -8,7 +8,7 @@
 # -- Core (required on all platforms) --
 numpy>=1.16
 opencv-python>=4.1
-pyttsx3>=2.90
+pyttsx3==2.90   # pinned: 2.98+ uses `from __future__ import annotations` which needs Py3.7+ (Jetson Nano = Py3.6)
 
 # -- GPS (Jetson Nano only, skip on Mac with --mock) --
 pyserial>=3.4

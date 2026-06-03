@@ -115,7 +115,7 @@ class ALASConfig:
     record_dir: str = "outputs/field_tests"
 
     # ── Boot / warmup / sleep ────────────────────────────────────
-    warmup_timeout_sec: float = 90.0      # await_ready max wait before forcing ACTIVE.
+    warmup_timeout_sec: float = 60.0      # await_ready max wait before forcing ACTIVE.
     sleep_idle_timeout_sec: float = 0.0   # 0 = never auto-sleep; >0 enables idle-sleep.
 
     # ── Runtime flags (set by --mock / --no-camera / --bypass-*) ──
