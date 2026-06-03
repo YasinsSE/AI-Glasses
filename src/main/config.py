@@ -13,6 +13,7 @@ every module reads its parameters from its own typed config object
 
 import argparse
 import os
+from typing import Optional, Tuple
 from dataclasses import dataclass, field
 
 from ai.ai_config import AIConfig
@@ -94,6 +95,19 @@ class ALASConfig:
     # ── Cross-cutting paths ──────────────────────────────────────
     osm_map_path: str = "navigation/router/map.osm"
 
+    # ── Mic-less navigation ──────────────────────────────────────
+    # --auto-nav <category>: with no microphone, automatically route to the
+    # nearest POI of this category once the system is ACTIVE with a GPS fix,
+    # and let a PTT press re-trigger the same route. "" = disabled.
+    auto_nav_category: str = ""
+    # --auto-nav-coord "LAT,LON": route to an EXACT map-picked coordinate instead
+    # of the nearest category. Best for testing turn-by-turn (pick a spot that
+    # needs turns). Overrides auto_nav_category when set. None = disabled.
+    auto_nav_coord: Optional[Tuple[float, float]] = None
+    # Settle delay AFTER "SYSTEM READY" before the auto-route is issued, so the
+    # boot announcements finish and the camera/GPS pipeline is steady first.
+    auto_nav_delay_sec: float = 10.0
+
     # ── Field-test recorder ──────────────────────────────────────
     rec: RecorderConfig = field(default_factory=RecorderConfig)
     record: bool = False               # --record: enable the black-box recorder.
@@ -137,6 +151,13 @@ class ALASConfig:
                             help="Print a one-line live status dashboard to stdout")
         parser.add_argument("--auto-standby", action="store_true",
                             help="Enable automatic power-saving STANDBY on sustained inactivity")
+        parser.add_argument("--auto-nav", metavar="CATEGORY", default=None,
+                            help="No-mic mode: auto-route to nearest CATEGORY (e.g. eczane) "
+                                 "on startup; a PTT press re-triggers it")
+        parser.add_argument("--auto-nav-coord", metavar="LAT,LON", default=None,
+                            help="No-mic mode: auto-route to this exact coordinate "
+                                 "(e.g. 39.9245,32.8465); overrides --auto-nav. Best for "
+                                 "testing turn-by-turn — pick a destination that needs turns")
         args = parser.parse_args(argv)
 
         config = cls()
@@ -161,6 +182,13 @@ class ALASConfig:
         config.record = args.record
         config.live = args.live
         config.idle.enabled = args.auto_standby
+        config.auto_nav_category = (args.auto_nav or "").strip().lower()
+        if args.auto_nav_coord:
+            try:
+                _lat_s, _lon_s = args.auto_nav_coord.split(",")
+                config.auto_nav_coord = (float(_lat_s), float(_lon_s))
+            except (ValueError, AttributeError):
+                parser.error("--auto-nav-coord must be 'LAT,LON', e.g. 39.9245,32.8465")
 
         # Anchor relative paths so the entry point can be invoked from any
         # working directory.

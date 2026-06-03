@@ -115,6 +115,26 @@ class VoiceCommandHandler:
             self._voice.say_prompt("Konuşma motoru hâlâ yükleniyor.")
             return
 
+        # -- Mic-less (--bypass-stt) PTT behaviour --------------------------
+        # With no microphone, a PTT press (re)starts guidance to the default
+        # destination instead of prompting for stdin, which a headless service
+        # cannot read. Falls through to the typed-stdin path only on an
+        # interactive terminal with no default set (dev convenience).
+        if self._stt is None and self._config.bypass_stt:
+            coord = getattr(self._config, "auto_nav_coord", None)
+            cat = getattr(self._config, "auto_nav_category", "")
+            if coord:
+                self.route_to_coord(coord[0], coord[1])
+                self._rec.log_command("%s,%s" % coord, intent="navigation", action="ptt_auto_nav_coord")
+                return
+            if cat:
+                self.route_to(cat)
+                self._rec.log_command(cat, intent="navigation", action="ptt_auto_nav")
+                return
+            if not sys.stdin.isatty():
+                self._voice.say_prompt("Mikrofon yok, komut verilemiyor.")
+                return
+
         # -- Get text: either via microphone (STT) or keyboard (bypass) -----
         text = self._get_text_input()
         if not text:
@@ -187,7 +207,19 @@ class VoiceCommandHandler:
     # -- Intent handlers ----------------------------------------------------
 
     def _handle_navigation(self, text):
-        """Extract destination from spoken text and start route navigation."""
+        """Extract destination from spoken/typed text and start route navigation."""
+        category = self._extract_category(text)
+        if not category:
+            self._voice.say_prompt("Nereye gitmek istediginizi anlayamadim. Lutfen tekrar soyleyin.")
+            return
+        self.route_to(category)
+
+    def route_to(self, category):
+        """Start navigation to the nearest POI of ``category``.
+
+        Shared by spoken/typed commands, the mic-less PTT button, and the
+        ``--auto-nav`` startup route. Returns True on success.
+        """
         if self._nav.is_active:
             self._voice.say_prompt("Mevcut rota iptal ediliyor, yeni rota hesaplaniyor.")
             self._nav.stop_navigation()
@@ -195,27 +227,48 @@ class VoiceCommandHandler:
         fix = self._gps.get_coord()
         if fix is None:
             self._voice.say_prompt("GPS sinyali bulunamadi. Lutfen acik alanda deneyin.")
-            return
+            return False
 
         lat, lon, _ = fix
-        position = Coord(lat, lon)
-
-        category = self._extract_category(text)
-        if not category:
-            self._voice.say_prompt("Nereye gitmek istediginizi anlayamadim. Lutfen tekrar soyleyin.")
-            return
-
         self._voice.say_prompt("En yakin %s araniyor." % category)
-
-        success, _msg, poi = self._nav.navigate_to_nearest(position, category)
+        success, _msg, poi = self._nav.navigate_to_nearest(Coord(lat, lon), category)
 
         if success and poi:
+            self._rec.log_route(self._nav.get_route(), origin=(lat, lon),
+                                destination=(poi.coord.lat, poi.coord.lon))
             self._voice.say_prompt(
                 "En yakin %s %d metre uzakta. Rota hazir, yonlendirme basliyor."
                 % (category, int(poi.distance_m))
             )
-        else:
-            self._voice.say_prompt("Yakinlarda %s bulunamadi." % category)
+            return True
+        self._voice.say_prompt("Yakinlarda %s bulunamadi." % category)
+        return False
+
+    def route_to_coord(self, lat, lon):
+        """Start navigation to an exact coordinate (test / map-picked destination).
+
+        Uses the current GPS fix as origin and routes to ``(lat, lon)`` via the
+        existing ``NavigationSystem.start_navigation``. Returns True on success.
+        """
+        if self._nav.is_active:
+            self._voice.say_prompt("Mevcut rota iptal ediliyor, yeni rota hesaplaniyor.")
+            self._nav.stop_navigation()
+
+        fix = self._gps.get_coord()
+        if fix is None:
+            self._voice.say_prompt("GPS sinyali bulunamadi. Lutfen acik alanda deneyin.")
+            return False
+
+        flat, flon, _ = fix
+        self._voice.say_prompt("Secilen hedefe rota hesaplaniyor.")
+        success, _msg = self._nav.start_navigation(Coord(flat, flon), Coord(lat, lon))
+        if success:
+            self._rec.log_route(self._nav.get_route(), origin=(flat, flon),
+                                destination=(lat, lon))
+            self._voice.say_prompt("Rota hazir, yonlendirme basliyor.")
+            return True
+        self._voice.say_prompt("Hedefe rota bulunamadi.")
+        return False
 
     def _handle_system_command(self, text):
         """Sleep / cancel-route / shutdown."""

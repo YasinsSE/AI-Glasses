@@ -81,6 +81,7 @@ class NullRecorder:
     def log_perception(self, result, chosen=None) -> None: ...
     def log_speak(self, method, text, spoken, reason=None) -> None: ...
     def log_nav(self, status, distance_to_next_m=None, step_text=None, gps=None) -> None: ...
+    def log_route(self, steps, origin=None, destination=None) -> None: ...
     def log_gps(self, lat, lon, age_s, sats, hdop, status, utc=None) -> None: ...
     def log_command(self, text, intent=None, confidence=None, action=None) -> None: ...
     def note_gps_utc(self, utc_dt, captured_mono) -> None: ...
@@ -196,6 +197,16 @@ class SessionRecorder:
         self._emit({"type": "nav", "status": str(status),
                     "distance_to_next_m": distance_to_next_m,
                     "step_text": step_text, "gps": gps})
+
+    def log_route(self, steps, origin=None, destination=None) -> None:
+        """Record the full planned route (every step + coords) when created."""
+        try:
+            step_dicts = [s.to_dict() for s in (steps or [])]
+        except Exception:  # noqa: BLE001
+            step_dicts = []
+        self._emit({"type": "route", "n_steps": len(step_dicts),
+                    "origin": origin, "destination": destination,
+                    "steps": step_dicts})
 
     def log_gps(self, lat, lon, age_s, sats, hdop, status, utc=None) -> None:
         self._status["gps"] = f"{lat:.5f},{lon:.5f}"

@@ -62,16 +62,22 @@ PRESS_CONFIRM_GAP_SEC = 0.01
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))   # .../src/main
 SRC_DIR = os.path.dirname(_THIS_DIR)                      # .../src
 
-# The command alas_main is launched with. TEST configuration for now
-# (--bypass-stt --record --auto-standby); edit this single list once field
-# tests finish. --auto-standby enables the power-saving STANDBY: after
-# ~idle_enter_sec of stillness the camera/inference shut down (PTT wakes it).
+# The command alas_main is launched with. TEST configuration for now; edit this
+# single list once field tests finish.
+#   --bypass-stt    : no microphone — skip STT.
+#   --record        : field-test black-box recorder (outputs/field_tests/<ts>/).
+#   --auto-standby  : power-save STANDBY after ~idle_enter_sec of stillness.
+#   --auto-nav eczane : no-mic auto-route to nearest pharmacy on startup; a PTT
+#                       press re-triggers the same route.
 LAUNCH_CMD = [
     sys.executable, "-m", "main.alas_main",
     "--model", "models/segmentation/alas_engine.trt",
     "--bypass-stt",
     "--record",
     "--auto-standby",
+    # Test destination: Anıt Eczanesi, Neyzen Tevfik Sk. (needs turns → good for
+    # testing turn-by-turn). A PTT press re-routes here from the current spot.
+    "--auto-nav-coord", "39.921555,32.844175",
 ]
 
 logger = logging.getLogger("ALAS.launcher")

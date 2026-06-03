@@ -174,3 +174,7 @@ class NavigationSystem:
     @property
     def remaining_steps(self) -> int:
         return self._tracker.remaining_steps
+
+    def get_route(self):
+        """Steps of the currently loaded route (empty list if none)."""
+        return self._tracker.route

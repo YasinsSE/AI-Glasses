@@ -59,6 +59,11 @@ class RouteTracker:
     def remaining_steps(self) -> int:
         return max(0, len(self._route) - self._step_index)
 
+    @property
+    def route(self) -> List[RouteStep]:
+        """A copy of the currently loaded route's steps (empty if none)."""
+        return list(self._route)
+
     # ------------------------------------------------------------------
     # Core method — call on every GPS update
     # ------------------------------------------------------------------

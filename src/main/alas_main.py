@@ -153,6 +153,33 @@ def main():
         voice.announce_ready()
         logger.info("[Main] ======== ALAS SYSTEM READY ========")
 
+    # 7b. Mic-less auto-navigation: once ACTIVE with a GPS fix, route to the
+    #     default destination so the field test gets turn-by-turn guidance
+    #     without a microphone. An exact --auto-nav-coord wins over the nearest
+    #     --auto-nav category. A PTT press re-triggers it later.
+    if not stop_event.is_set() and (config.auto_nav_coord or config.auto_nav_category):
+        def _auto_nav():
+            # Wait for a GPS fix (already present once ACTIVE unless bypassed).
+            for _ in range(int(config.warmup_timeout_sec) or 90):
+                if stop_event.is_set():
+                    return
+                if gps.get_coord() is not None:
+                    break
+                stop_event.wait(1.0)
+            # Settle delay so boot announcements finish and the pipeline steadies.
+            if config.auto_nav_delay_sec > 0:
+                stop_event.wait(config.auto_nav_delay_sec)
+            if stop_event.is_set():
+                return
+            if config.auto_nav_coord:
+                lat, lon = config.auto_nav_coord
+                logger.info("[Main] Auto-nav: routing to coordinate %.6f,%.6f.", lat, lon)
+                commands.route_to_coord(lat, lon)
+            else:
+                logger.info("[Main] Auto-nav: routing to nearest '%s'.", config.auto_nav_category)
+                commands.route_to(config.auto_nav_category)
+        threading.Thread(target=_auto_nav, name="AutoNav", daemon=True).start()
+
     # 8. Idle until SIGINT / SIGTERM.
     lifecycle.wait_for_shutdown(
         stop_event,
