@@ -5,16 +5,23 @@ can never block the main program. A single background worker drains the queue
 so utterances never overlap.
 """
 
+import logging
 import subprocess
 import sys
 import threading
 import queue
+
+logger = logging.getLogger("ALAS.tts")
 
 # Queue so utterances do not cut each other off. Items are (kind, text)
 # tuples; ``None`` is the shutdown sentinel.
 _tts_queue = queue.Queue()
 # Guards the read-modify-write when dropping stale obstacle items.
 _queue_lock = threading.Lock()
+
+# Surface each distinct TTS failure ONCE (so a broken audio path is visible in
+# the journal without spamming a warning for every single utterance).
+_logged_tts_errors = set()
 
 
 def _drop_pending_obstacles():
@@ -49,27 +56,47 @@ def _tts_worker():
             break
         _, text = item
 
-        # Jetson Nano / Mac compatible quiet runner. A subprocess is used so a
-        # stuck engine cannot freeze the main program.
+        # Jetson Nano / Mac compatible runner. A subprocess is used so a stuck
+        # engine cannot freeze the main program. Errors are reported to stderr
+        # (and surfaced via the logger below) instead of being swallowed — a
+        # silent failure is exactly what hides a broken audio path.
         script = (
-            "import pyttsx3\n"
+            "import pyttsx3, sys\n"
             "try:\n"
             "    engine = pyttsx3.init()\n"
-            "    engine.setProperty('rate', 160)\n"  # Speech rate.
+            "    engine.setProperty('rate', 150)\n"  # Speech rate (slightly slower = clearer).
             "    engine.setProperty('volume', 1.0)\n"
+            # Select the Turkish voice so espeak uses Turkish phonetics instead of
+            # reading Turkish text with the default English voice (unintelligible).
+            "    try:\n"
+            "        engine.setProperty('voice', 'tr')\n"
+            "    except Exception:\n"
+            "        pass\n"
             f"    engine.say({repr(text)})\n"
             "    engine.runAndWait()\n"
-            "except:\n"
-            "    pass"
+            "except Exception as e:\n"
+            "    sys.stderr.write('TTS_SUBPROC_ERROR: %r' % (e,))\n"
+            "    sys.exit(1)\n"
         )
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 [sys.executable, "-c", script],
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             )
-        except Exception as e:
-            print(f"[TTS ERR] Speech failure: {e}")
+            if proc.returncode != 0:
+                err = (proc.stderr or b"").decode("utf-8", "replace").strip() or "no stderr"
+                if err not in _logged_tts_errors:
+                    _logged_tts_errors.add(err)
+                    logger.warning(
+                        "[TTS] playback FAILED (rc=%s) — no audio will be heard. "
+                        "Check the audio device/PulseAudio under the service. Error: %s",
+                        proc.returncode, err,
+                    )
+        except Exception as e:  # noqa: BLE001 — launching the subprocess itself failed
+            if str(e) not in _logged_tts_errors:
+                _logged_tts_errors.add(str(e))
+                logger.warning("[TTS] subprocess launch failed: %s", e)
         finally:
             _tts_queue.task_done()
 

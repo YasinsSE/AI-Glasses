@@ -188,9 +188,13 @@ def await_ready(
     deadline = time.monotonic() + timeout_sec
     voice.announce_boot()  # idempotent — main() already called it once
 
+    waits_for = "model load" + ("" if bypass_gps else " + GPS fix")
+    logger.info("[Warmup] Waiting for %s (timeout %.0fs).", waits_for, timeout_sec)
+    last_progress = 0.0
+
     while time.monotonic() < deadline:
         if stop_event is not None and stop_event.is_set():
-            logger.info("[Lifecycle] Warmup aborted by shutdown signal.")
+            logger.info("[Warmup] Aborted by shutdown signal — not promoting to ACTIVE.")
             return
 
         if bypass_gps:
@@ -205,8 +209,22 @@ def await_ready(
         model_ok = perception is None or perception.model_ready.is_set()
 
         if gps_ok and model_ok:
+            logger.info("[Warmup] COMPLETE — %s ready.", waits_for)
             modes.transition_to(SystemMode.ACTIVE)
             return
+
+        # Throttled progress so the operator can see WHAT is blocking (e.g. an
+        # indoor run stuck on a GPS fix) instead of a silent 90 s wait.
+        now = time.monotonic()
+        if now - last_progress >= 5.0:
+            last_progress = now
+            pending = []
+            if not gps_ok:
+                pending.append("GPS fix")
+            if not model_ok:
+                pending.append("model load")
+            logger.info("[Warmup] still waiting for: %s (%.0fs left)",
+                        ", ".join(pending), max(0.0, deadline - now))
 
         # Interruptible wait so a shutdown request during warmup is honoured
         # within 0.5 s instead of after the full timeout.
@@ -218,7 +236,7 @@ def await_ready(
     if stop_event is not None and stop_event.is_set():
         return
 
-    logger.warning("[Lifecycle] Warmup timeout — promoting to ACTIVE anyway.")
+    logger.warning("[Warmup] TIMEOUT after %.0fs — forcing ACTIVE in limited mode.", timeout_sec)
     voice.emergency("Hazırlık zaman aşımı, sınırlı modda devam ediyorum.")
     modes.transition_to(SystemMode.ACTIVE)
 

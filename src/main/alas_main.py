@@ -135,6 +135,7 @@ def main():
     status_led.start()
 
     # 7. Wait for sensors/model warmup before transitioning to ACTIVE.
+    logger.info("[Main] ======== WARMUP STARTING ========")
     if config.bypass_warmup:
         logger.info("[Main] --bypass-warmup active: skipping sensor readiness check.")
         modes.transition_to(SystemMode.ACTIVE)
@@ -149,9 +150,11 @@ def main():
     # If the user pressed the launch button during warmup, stop_event is now
     # set: skip the "ready" announcement and fall straight through to an
     # orderly shutdown instead of going ACTIVE for a split second.
-    if not stop_event.is_set():
+    if stop_event.is_set():
+        logger.info("[Main] Warmup aborted — shutting down without going ACTIVE.")
+    else:
         voice.announce_ready()
-        logger.info("[Main] ======== ALAS SYSTEM READY ========")
+        logger.info("[Main] ======== ALAS SYSTEM READY (ACTIVE) ========")
 
     # 7b. Mic-less auto-navigation: once ACTIVE with a GPS fix, route to the
     #     default destination so the field test gets turn-by-turn guidance
