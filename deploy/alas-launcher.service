@@ -53,20 +53,3 @@ WantedBy=multi-user.target
 #
 # NOTE: the launcher only TOGGLES alas_main. The Jetson never powers off here;
 #       cut wall power to shut the device down.
-
-# 1. Kullanıcının uid'sini doğrula (büyük ihtimalle 1000)
-id -u alas
-
-# 2. Kullanıcı oturumunu (pulse) login olmadan da ayakta tut
-loginctl enable-linger alas
-
-# 3. Güncel servis dosyasını kur (veya /etc/systemd/system/...'i elle düzenle)
-sudo cp ~/ALAS_PROJECT/AI-Glasses/deploy/alas-launcher.service /etc/systemd/system/
-#    uid 1000 DEĞİLSE iki Environment= satırındaki numarayı düzelt:
-#    sudoedit /etc/systemd/system/alas-launcher.service
-
-# 4. Yeniden yükle + başlat
-sudo systemctl daemon-reload
-sudo systemctl restart alas-launcher
-
-# 5. Butona bas → birkaç saniye içinde "ALAS sistemi hazırlanıyor" duymalısın
