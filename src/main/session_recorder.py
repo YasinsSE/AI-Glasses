@@ -58,6 +58,120 @@ def _load_avg() -> Optional[float]:
         return None
 
 
+# ── GPU / RAM / power telemetry (Jetson sysfs; graceful no-op elsewhere) ─────
+
+def _read_int_file(path: str) -> Optional[int]:
+    try:
+        with open(path) as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+
+def _read_text_file(path: str) -> Optional[str]:
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except Exception:
+        return None
+
+
+def _call_with_timeout(fn, timeout: float = 1.0):
+    """Run ``fn()`` on a short-lived daemon thread; return its result or None if
+    it does not finish within ``timeout``.
+
+    The INA3221 power sensor sits on the I2C bus, so a momentarily busy bus could
+    stall a sysfs read. Bounding it here guarantees the telemetry loop never
+    blocks (worst case = one skipped power sample).
+    """
+    result = [None]
+
+    def _runner():
+        try:
+            result[0] = fn()
+        except Exception:
+            result[0] = None
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join(timeout)
+    return result[0]
+
+
+def read_gpu_load_pct() -> Optional[float]:
+    """Jetson GPU load as a percentage (0–100), or None when unavailable.
+
+    The Tegra sysfs value is per-mille (0–1000), so divide by 10 — otherwise a
+    full load reads as '850%' instead of '85%'.
+    """
+    for path in ("/sys/devices/gpu.0/load",
+                 "/sys/devices/platform/gpu.0/load",
+                 "/sys/devices/57000000.gpu/load"):
+        raw = _read_int_file(path)
+        if raw is not None:
+            return round(raw / 10.0, 1)
+    return None
+
+
+def read_mem() -> dict:
+    """Used RAM from /proc/meminfo: {used_mb, total_mb, used_pct}. Empty on error."""
+    try:
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                parts = rest.strip().split()
+                if parts:
+                    info[key.strip()] = int(parts[0])  # value in kB
+        total = info.get("MemTotal")
+        avail = info.get("MemAvailable")
+        if not total or avail is None:
+            return {}
+        used_kb = total - avail
+        return {"used_mb": round(used_kb / 1024.0, 1),
+                "total_mb": round(total / 1024.0, 1),
+                "used_pct": round(100.0 * used_kb / total, 1)}
+    except Exception:
+        return {}
+
+
+# JetPack 4.6.x Nano fallback: INA3221 on I2C bus 6, addr 0x40.
+#   in_power0 → VDD_IN (total)   in_power1 → VDD_GPU   in_power2 → VDD_CPU
+_INA3221_FALLBACK_DIR = "/sys/bus/i2c/drivers/ina3221x/6-0040/iio:device0"
+
+
+def _read_power_rails() -> dict:
+    """Read INA3221 rail power in mW → {rail_label: mW, ..., 'total': mW}."""
+    candidates = glob.glob("/sys/bus/i2c/devices/*/iio:device*/in_power*_input")
+    candidates += glob.glob("/sys/bus/i2c/drivers/ina3221*/*/iio:device*/in_power*_input")
+    for ch in (0, 1, 2):  # explicit JetPack 4.6.x fallback
+        candidates.append(os.path.join(_INA3221_FALLBACK_DIR, f"in_power{ch}_input"))
+
+    rails: dict = {}
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        mw = _read_int_file(path)
+        if mw is None:
+            continue
+        base = os.path.dirname(path)
+        ch = os.path.basename(path).replace("in_power", "").replace("_input", "")
+        label = (_read_text_file(os.path.join(base, f"in_power{ch}_label"))
+                 or _read_text_file(os.path.join(base, f"rail_name_{ch}"))
+                 or f"rail{ch}")
+        rails[label] = mw  # same physical device via symlinks → key overwrite, no dupes
+
+    if rails and "total" not in rails:
+        in_rail = next((v for k, v in rails.items() if "IN" in k.upper()), None)
+        rails["total"] = in_rail if in_rail is not None else sum(rails.values())
+    return rails
+
+
+def read_power_mw() -> dict:
+    """INA3221 rail power (mW), I2C-timeout-guarded. Empty dict when unavailable."""
+    return _call_with_timeout(_read_power_rails, timeout=1.0) or {}
+
+
 def _git_commit() -> Optional[str]:
     try:
         out = subprocess.run(
@@ -122,7 +236,8 @@ class SessionRecorder:
         self._low_disk_announced = False
 
         self._clock_synced = False
-        self._status: dict = {"mode": "?", "hazard": None, "utterance": None, "gps": None, "temp": None}
+        self._status: dict = {"mode": "?", "hazard": None, "utterance": None,
+                              "gps": None, "temp": None, "gpu": None, "power": None}
         self._stop = threading.Event()
         self._last_checkpoint = time.monotonic()
 
@@ -318,7 +433,15 @@ class SessionRecorder:
             temps = read_soc_temps()
             if temps:
                 self._status["temp"] = max(temps.values())
-            self._emit({"type": "telemetry", "temps_c": temps, "load1": _load_avg()})
+            gpu = read_gpu_load_pct()
+            ram = read_mem()
+            power = read_power_mw()
+            if gpu is not None:
+                self._status["gpu"] = gpu
+            if power.get("total") is not None:
+                self._status["power"] = power["total"]
+            self._emit({"type": "telemetry", "temps_c": temps, "load1": _load_avg(),
+                        "gpu_pct": gpu, "ram": ram or None, "power_mw": power or None})
             self._check_disk()
 
     def _check_disk(self) -> None:
@@ -339,8 +462,11 @@ class SessionRecorder:
         while not self._stop.wait(1.0):
             s = self._status
             line = (f"\r[LIVE] mode={s.get('mode')} fps={s.get('fps','?')} "
-                    f"temp={s.get('temp','?')}C hazard={s.get('hazard')} "
-                    f"say={(s.get('utterance') or '')[:24]!r} gps={s.get('gps')}   ")
+                    f"gpu={s.get('gpu') if s.get('gpu') is not None else '?'}% "
+                    f"temp={s.get('temp','?')}C "
+                    f"pow={s.get('power') if s.get('power') is not None else '?'}mW "
+                    f"hazard={s.get('hazard')} "
+                    f"say={(s.get('utterance') or '')[:20]!r} gps={s.get('gps')}   ")
             sys.stdout.write(line)
             sys.stdout.flush()
 
@@ -502,21 +628,48 @@ def build_summary(events: list, title: str = "ALAS Field Test Report",
         lines.append(f"- Safety: safe **{n_safe}** | caution **{n_caution}** | unsafe **{n_unsafe}**")
         lines.append("")
 
-    # Thermal
+    # Thermal / power
     if telem:
+        lines.append("## Thermal / power")
         all_temps = [max(e["temps_c"].values()) for e in telem if e.get("temps_c")]
         if all_temps:
             tmax = max(all_temps)
-            lines.append("## Thermal / power")
             lines.append(f"- Peak SoC temp: **{tmax:.0f} °C**")
             hot = sum(1 for t in all_temps if t >= 80)
             if hot:
                 lines.append(f"- ⚠ {hot} sample(s) ≥ 80 °C — possible thermal throttling "
                              f"(correlate with FPS dips in the timeline).")
-            loads = [e.get("load1") for e in telem if e.get("load1") is not None]
-            if loads:
-                lines.append(f"- CPU load (1 min): avg **{_avg(loads):.2f}**, max **{max(loads):.2f}**")
-            lines.append("")
+        loads = [e.get("load1") for e in telem if e.get("load1") is not None]
+        if loads:
+            lines.append(f"- CPU load (1 min): avg **{_avg(loads):.2f}**, max **{max(loads):.2f}**")
+        gpus = [e.get("gpu_pct") for e in telem if e.get("gpu_pct") is not None]
+        if gpus:
+            lines.append(f"- GPU load: avg **{_avg(gpus):.0f}%**, peak **{max(gpus):.0f}%**")
+        rams = [e["ram"]["used_mb"] for e in telem
+                if e.get("ram") and e["ram"].get("used_mb") is not None]
+        if rams:
+            rpct = [e["ram"]["used_pct"] for e in telem
+                    if e.get("ram") and e["ram"].get("used_pct") is not None]
+            lines.append(f"- RAM used: avg **{_avg(rams):.0f} MB**, peak **{max(rams):.0f} MB**"
+                         + (f" ({max(rpct):.0f}% peak)" if rpct else ""))
+        # Power draw + integrated energy (mWh) → battery consumption estimate.
+        totals = [(e["t"], e["power_mw"]["total"]) for e in telem
+                  if e.get("power_mw") and e["power_mw"].get("total") is not None
+                  and isinstance(e.get("t"), (int, float))]
+        if totals:
+            pvals = [p for _, p in totals]
+            lines.append(f"- Power draw (VDD_IN): avg **{_avg(pvals):.0f} mW**, "
+                         f"peak **{max(pvals):.0f} mW**")
+            energy_mws = 0.0  # trapezoidal integral of power over time (mW·s)
+            for (t0, p0), (t1, p1) in zip(totals, totals[1:]):
+                energy_mws += (p0 + p1) / 2.0 * (t1 - t0)
+            mwh = energy_mws / 3600.0
+            lines.append(f"- Energy this session: **{mwh:.1f} mWh** "
+                         f"(≈ {mwh / 1000.0:.2f} Wh over {duration / 60:.1f} min)")
+        elif not gpus and not rams:
+            lines.append("- (GPU/RAM/power sensors not readable — desktop run or "
+                         "INA3221 sysfs path/JetPack mismatch.)")
+        lines.append("")
 
     # Voice quality
     lines.append("## Voice output")

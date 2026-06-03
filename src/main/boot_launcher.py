@@ -75,8 +75,7 @@ LAUNCH_CMD = [
     "--bypass-stt",
     "--record",
     "--auto-standby",
-    # Test destination: Anıt Eczanesi, Neyzen Tevfik Sk. (needs turns → good for
-    # testing turn-by-turn). A PTT press re-routes here from the current spot.
+    # Test destination - A PTT press re-routes here from the current spot.
     "--auto-nav-coord", "39.921555,32.844175",
 ]
 
