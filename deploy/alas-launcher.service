@@ -20,6 +20,16 @@ ExecStart=/home/alas/ALAS_PROJECT/AI-Glasses/alas_env/bin/python -m main.boot_la
 SupplementaryGroups=gpio audio
 Environment=PYTHONUNBUFFERED=1
 
+# ── Audio (TTS) ───────────────────────────────────────────────────────────
+# A systemd service has NO user login session, so TTS (pyttsx3 → espeak →
+# PulseAudio) cannot reach the user's audio by default and stays silent — even
+# though it works when you run alas_main manually in a terminal. Point the
+# service at the user's PulseAudio socket so it uses the SAME path that works
+# manually. Replace 1000 with `id -u <User>` if your uid differs, and run
+# `loginctl enable-linger <User>` once so /run/user/1000 exists without a login.
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
+
 # Keep the watcher alive across crashes; it is the only way to start ALAS.
 Restart=always
 RestartSec=3
@@ -43,3 +53,20 @@ WantedBy=multi-user.target
 #
 # NOTE: the launcher only TOGGLES alas_main. The Jetson never powers off here;
 #       cut wall power to shut the device down.
+
+# 1. Kullanıcının uid'sini doğrula (büyük ihtimalle 1000)
+id -u alas
+
+# 2. Kullanıcı oturumunu (pulse) login olmadan da ayakta tut
+loginctl enable-linger alas
+
+# 3. Güncel servis dosyasını kur (veya /etc/systemd/system/...'i elle düzenle)
+sudo cp ~/ALAS_PROJECT/AI-Glasses/deploy/alas-launcher.service /etc/systemd/system/
+#    uid 1000 DEĞİLSE iki Environment= satırındaki numarayı düzelt:
+#    sudoedit /etc/systemd/system/alas-launcher.service
+
+# 4. Yeniden yükle + başlat
+sudo systemctl daemon-reload
+sudo systemctl restart alas-launcher
+
+# 5. Butona bas → birkaç saniye içinde "ALAS sistemi hazırlanıyor" duymalısın
