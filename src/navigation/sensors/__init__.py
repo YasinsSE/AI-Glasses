@@ -17,6 +17,7 @@ def build_gps(config):
             port=config.gps.port,
             baudrate=config.gps.baudrate,
             warmup_sec=config.gps.warmup_sec,
+            window=config.gps.fix_window_sec,
         )
     gps.start()
     return gps
