@@ -108,13 +108,16 @@ class VoicePolicy:
         self._priority_speak(text)
         self._rec.log_speak("prompt", text, True)
 
-    def say_obstacle(self, text: str) -> None:
-        """Non-blocking obstacle alert. Suppressed during the post-nav silence window."""
+    def say_obstacle(self, text: str, urgent: bool = False) -> None:
+        """Non-blocking obstacle alert. Suppressed during the post-nav silence window.
+
+        ``urgent=True`` (closing-threat warnings) is spoken faster + higher-pitched.
+        """
         with self._lock:
             if time.monotonic() < self._suppress_obstacles_until:
                 self._rec.log_speak("obstacle", text, False, reason="post_nav_silence")
                 return
-        speak(text, kind="obstacle")
+        speak(text, kind="obstacle", urgent=urgent)
         self._rec.log_speak("obstacle", text, True)
 
     # ── Polled by services ───────────────────────────────────────

@@ -1,19 +1,26 @@
-"""Text-to-speech output via pyttsx3, serialised through a worker thread.
+"""Text-to-speech output via espeak, serialised through a worker thread.
 
-Each utterance is spoken in a short-lived subprocess so a hung pyttsx3 engine
-can never block the main program. A single background worker drains the queue
-so utterances never overlap.
+Each utterance is spoken by calling the ``espeak`` binary directly (Turkish
+voice). This is far cheaper than the old "spawn python + import pyttsx3 per
+utterance" path — no interpreter startup, no module import — which matters on
+the Jetson Nano where warnings fire several times per minute. A single
+background worker drains the queue so utterances never overlap, and each call
+is its own short-lived subprocess so a stuck engine can never freeze the main
+program.
+
+Urgency: ``urgent=True`` utterances (the closing-threat warnings from
+PerceptionService) are spoken FASTER and HIGHER-pitched, so the user hears the
+urgency in the rhythm of the voice, not only in the words.
 """
 
 import logging
 import subprocess
-import sys
 import threading
 import queue
 
 logger = logging.getLogger("ALAS.tts")
 
-# Queue so utterances do not cut each other off. Items are (kind, text)
+# Queue so utterances do not cut each other off. Items are (kind, text, urgent)
 # tuples; ``None`` is the shutdown sentinel.
 _tts_queue = queue.Queue()
 # Guards the read-modify-write when dropping stale obstacle items.
@@ -23,15 +30,23 @@ _queue_lock = threading.Lock()
 # the journal without spamming a warning for every single utterance).
 _logged_tts_errors = set()
 
+# ── espeak voice parameters ──────────────────────────────────────────────────
+_VOICE         = "tr"   # Turkish voice (correct phonetics).
+_AMPLITUDE     = 200    # 0..200 — max volume for outdoor use.
+_NORMAL_SPEED  = 150    # words/min (espeak default 175; 150 = clearer Turkish).
+_NORMAL_PITCH  = 50     # 0..99 (espeak default 50).
+# Urgent: faster + higher pitch → conveys "act now" through the rhythm.
+_URGENT_SPEED  = 200
+_URGENT_PITCH  = 70
+
 
 def _drop_pending_obstacles():
     """Remove not-yet-started obstacle items from the queue.
 
-    Obstacle alerts are spatial and perishable: after the Jetson unfreezes,
-    replaying warnings about cars the user already walked past is worse than
-    silence. We keep only the newest obstacle by dropping any pending ones
-    before enqueuing it. Priority items (nav / announcements) are preserved.
-    Must be called holding ``_queue_lock``.
+    Obstacle alerts are spatial and perishable: replaying warnings about cars
+    the user already walked past is worse than silence. We keep only the newest
+    obstacle by dropping any pending ones before enqueuing it. Priority items
+    (nav / announcements) are preserved. Must be called holding ``_queue_lock``.
     """
     kept = []
     try:
@@ -47,56 +62,44 @@ def _drop_pending_obstacles():
         _tts_queue.put(item)
 
 
+def _log_tts_error(key: str, msg: str, *args) -> None:
+    if key not in _logged_tts_errors:
+        _logged_tts_errors.add(key)
+        logger.warning(msg, *args)
+
+
 def _tts_worker():
-    """Worker thread that speaks queued text in the background."""
+    """Worker thread that speaks queued text via espeak."""
     while True:
         item = _tts_queue.get()
         if item is None:
             _tts_queue.task_done()
             break
-        _, text = item
+        kind, text, urgent = item
 
-        # Jetson Nano / Mac compatible runner. A subprocess is used so a stuck
-        # engine cannot freeze the main program. Errors are reported to stderr
-        # (and surfaced via the logger below) instead of being swallowed — a
-        # silent failure is exactly what hides a broken audio path.
-        script = (
-            "import pyttsx3, sys\n"
-            "try:\n"
-            "    engine = pyttsx3.init()\n"
-            "    engine.setProperty('rate', 150)\n"  # Speech rate (slightly slower = clearer).
-            "    engine.setProperty('volume', 1.0)\n"
-            # Select the Turkish voice so espeak uses Turkish phonetics instead of
-            # reading Turkish text with the default English voice (unintelligible).
-            "    try:\n"
-            "        engine.setProperty('voice', 'tr')\n"
-            "    except Exception:\n"
-            "        pass\n"
-            f"    engine.say({repr(text)})\n"
-            "    engine.runAndWait()\n"
-            "except Exception as e:\n"
-            "    sys.stderr.write('TTS_SUBPROC_ERROR: %r' % (e,))\n"
-            "    sys.exit(1)\n"
-        )
+        speed = _URGENT_SPEED if urgent else _NORMAL_SPEED
+        pitch = _URGENT_PITCH if urgent else _NORMAL_PITCH
+        cmd = ["espeak", "-v", _VOICE, "-s", str(speed), "-p", str(pitch),
+               "-a", str(_AMPLITUDE), text]
         try:
             proc = subprocess.run(
-                [sys.executable, "-c", script],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15,
             )
             if proc.returncode != 0:
                 err = (proc.stderr or b"").decode("utf-8", "replace").strip() or "no stderr"
-                if err not in _logged_tts_errors:
-                    _logged_tts_errors.add(err)
-                    logger.warning(
-                        "[TTS] playback FAILED (rc=%s) — no audio will be heard. "
-                        "Check the audio device/PulseAudio under the service. Error: %s",
-                        proc.returncode, err,
-                    )
-        except Exception as e:  # noqa: BLE001 — launching the subprocess itself failed
-            if str(e) not in _logged_tts_errors:
-                _logged_tts_errors.add(str(e))
-                logger.warning("[TTS] subprocess launch failed: %s", e)
+                _log_tts_error(
+                    err,
+                    "[TTS] espeak FAILED (rc=%s) — no audio. Is the audio device/"
+                    "PulseAudio routed under the service? Error: %s",
+                    proc.returncode, err,
+                )
+        except FileNotFoundError:
+            _log_tts_error("nofile",
+                           "[TTS] 'espeak' not found — install it: sudo apt install espeak")
+        except subprocess.TimeoutExpired:
+            logger.warning("[TTS] espeak timed out for %r", text[:40])
+        except Exception as e:  # noqa: BLE001
+            _log_tts_error(str(e), "[TTS] espeak launch failed: %s", e)
         finally:
             _tts_queue.task_done()
 
@@ -106,23 +109,23 @@ _tts_thread = threading.Thread(target=_tts_worker, daemon=True)
 _tts_thread.start()
 
 
-def speak(text: str, kind: str = "info"):
+def speak(text: str, kind: str = "info", urgent: bool = False):
     """Add text to the speech queue.
 
     ``kind="obstacle"`` marks perishable hazard alerts: enqueuing one first
     drops any pending obstacle still waiting, so a post-freeze backlog never
-    dumps stale spatial warnings. Other kinds (nav, announcements, prompts)
-    always queue in order.
+    dumps stale spatial warnings. ``urgent=True`` speaks faster + higher-pitched.
     """
     text = (text or "").strip()
     if not text:
         return
+    item = (kind, text, bool(urgent))
     if kind == "obstacle":
         with _queue_lock:
             _drop_pending_obstacles()
-            _tts_queue.put((kind, text))
+            _tts_queue.put(item)
     else:
-        _tts_queue.put((kind, text))
+        _tts_queue.put(item)
 
 
 def wait_until_done():
@@ -131,14 +134,11 @@ def wait_until_done():
 
 
 def shutdown_tts():
-    """Drain the queue, then stop the worker.
-
-    Must be called before the program exits.
-    """
+    """Drain the queue, then stop the worker. Call before the program exits."""
     _tts_queue.join()       # Let pending utterances finish.
     _tts_queue.put(None)    # Signal the worker to stop.
     _tts_thread.join(timeout=5)
-    print("[TTS] Shut down.")
+    logger.info("[TTS] Shut down.")
 
 
 def handle_intent_response(intent: str, text: str = ""):
@@ -148,17 +148,14 @@ def handle_intent_response(intent: str, text: str = ""):
         "navigation": "Anlaşıldı, rota hesaplanıyor.",
         "general": "",  # Stay silent for general intents.
     }
-
     msg = responses.get(intent, "")
     if msg:
         speak(msg)
-    # NOTE: for the "general" intent we do not parrot the user's text back.
-    # A future LLM integration could generate a meaningful reply here
-    # (e.g. "what time is it" -> the actual time).
 
 
 # Standalone module test.
 if __name__ == "__main__":
     print("TTS test system started...")
     speak("Sistem hazır. Ses testi yapılıyor.")
+    speak("Dikkat, çok yakın, durun.", kind="obstacle", urgent=True)
     shutdown_tts()

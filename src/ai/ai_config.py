@@ -63,6 +63,17 @@ class AIConfig:
     # "Yol açık" repeat interval while the scene stays safe.
     safe_announce_interval_sec: float = 30.0
 
+    # ── Closing-threat escalation (Faz 1) ────────────────────────────────────
+    # A centre hazard that keeps the SAME signature (same class/zone, already
+    # UNSAFE) would otherwise stay silent for ``min_obstacle_repeat_sec`` (20 s)
+    # even as the user walks into it. When the gap is CLOSING fast we override
+    # that and re-warn within ``urgent_interval_sec``.
+    urgent_interval_sec: float = 2.0        # min gap between re-warns while closing
+    imminent_distance_m: float = 2.5        # hazard nearer than this = imminent
+    walkable_drop_urgent: float = 0.12      # walkable_ratio dropping ≥ this between
+                                            # frames = rapidly closing
+    closing_distance_urgent_m: float = 0.8  # distance shrinking ≥ this between frames
+
     # ── Situation tracking / escalation ──────────────────────────────────
     # A hazard must persist in the forward path for this many consecutive
     # frames before the calm "var" notice escalates to an actionable VFH

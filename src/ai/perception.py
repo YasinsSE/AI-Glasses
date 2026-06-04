@@ -105,6 +105,16 @@ NEARBY_M = 5.0
 # kept as a module constant because generate_alerts is a pure function.
 BLOCK_WALKABLE_RATIO = 0.12
 
+# ── Obstacle relevance (Faz 1) ──────────────────────────────────────────────
+# A vehicle / dynamic hazard is only "on our path" if it intrudes the near
+# walking corridor OR is genuinely close. This stops far / side-parked /
+# cross-street cars from triggering "Önünüzde araç var" (the #1 field-test
+# false positive). Kept as module constants because generate_alerts and
+# _compute_safety_level are pure functions.
+RELEVANCE_DISTANCE_M   = 8.0   # beyond this (and not in corridor) → not relevant
+CORRIDOR_INTRUSION_RATIO = 0.15  # ≥ this share of the class's pixels in the
+                                 # near walking corridor → counts as "in the way"
+
 # Safety-level thresholds for vehicle classification.
 # A vehicle only contributes UNSAFE if it has significant presence in
 # the bottom half of the frame (i.e. close/ground-level) or covers a
@@ -130,6 +140,7 @@ class ZoneInfo:
     walkable_overlap: float = 1.0
     estimated_distance_m: Optional[float] = None
     bottom_half_ratio: float = 0.0  # fraction of class pixels in the bottom half of frame
+    corridor_overlap: float = 0.0   # fraction of class pixels inside the near walking corridor
 
 
 # Safety levels — see _compute_safety_level() for rules.
@@ -473,6 +484,11 @@ def analyse_scene(
     bottom_start = h // 2
     bottom = mask[bottom_start:, :]
     third = w // 3
+    # Near walking corridor (matches generate_path_guidance): bottom half,
+    # centre 70% of width. Used to decide whether a hazard is actually on our
+    # path vs off to the side / across the street.
+    corr_left  = int(w * CORRIDOR_MARGIN)
+    corr_right = int(w * (1.0 - CORRIDOR_MARGIN))
 
     zones: list = []
     max_hazard_priority = 0
@@ -528,6 +544,12 @@ def analyse_scene(
 
         bottom_half_ratio = b_total / px_count if px_count > 0 else 0.0
 
+        # Corridor overlap: share of this class's pixels inside the near walking
+        # corridor (bottom half, centre 70%). Low ⇒ the hazard is off-path
+        # (side/far), so it should not be announced as "in front of you".
+        corridor_px = int(bottom_binary[:, corr_left:corr_right].sum())
+        corridor_overlap = corridor_px / px_count if px_count > 0 else 0.0
+
         zones.append(ZoneInfo(
             class_id=cid_int,
             class_name=CLASS_NAMES[cid],
@@ -537,6 +559,7 @@ def analyse_scene(
             walkable_overlap=overlap,
             estimated_distance_m=distance_m,
             bottom_half_ratio=bottom_half_ratio,
+            corridor_overlap=corridor_overlap,
         ))
 
         cfg = CLASS_ALERT_CONFIG[cid]
@@ -581,9 +604,19 @@ def _compute_safety_level(zones: list, walkable_ratio: float) -> int:
 
         if cid == ClassID.VEHICLE:
             bh = zone.bottom_half_ratio
+            # A vehicle is only UNSAFE if it is BOTH close/grounded AND actually
+            # on our path (in the corridor or near). A big car off to the side /
+            # across the street is CAUTION, not UNSAFE — this is what made 98% of
+            # frames read UNSAFE in dense traffic.
+            relevant = (
+                (zone.estimated_distance_m is not None
+                 and zone.estimated_distance_m < RELEVANCE_DISTANCE_M)
+                or zone.corridor_overlap >= CORRIDOR_INTRUSION_RATIO
+            )
             if bh < VEHICLE_SAFE_BOTTOM_RATIO and ratio < VEHICLE_SAFE_FRAME_RATIO:
                 pass  # vehicle only in upper frame, small → safe
-            elif bh >= VEHICLE_UNSAFE_BOTTOM_RATIO or ratio >= VEHICLE_UNSAFE_FRAME_RATIO:
+            elif relevant and (bh >= VEHICLE_UNSAFE_BOTTOM_RATIO
+                               or ratio >= VEHICLE_UNSAFE_FRAME_RATIO):
                 level = max(level, SAFETY_UNSAFE)
             else:
                 level = max(level, SAFETY_CAUTION)
@@ -660,14 +693,28 @@ def generate_alerts(
             if not (is_center or is_close):
                 continue
 
-        # Forward-path blocking hint: a hazard in the centre zone with little
-        # walkable area to route around it. Used by the dispatcher to decide
-        # when a calm "var" notice should escalate to an actionable dodge.
-        # NOTE: wording (direction / proximity) is intentionally NOT baked in
-        # here — the dispatcher renders the final line after applying zone and
-        # proximity hysteresis, so it does not flicker frame-to-frame.
-        in_center = zone.dominant_zone == "center"
-        blocks_path = in_center and scene.walkable_ratio < BLOCK_WALKABLE_RATIO
+        # ── Relevance gate (Faz 1) ──────────────────────────────────────────
+        # A vehicle / dynamic hazard only matters if it intrudes the near
+        # walking corridor OR is genuinely close. Far / side-parked / cross-
+        # street cars are NOT on our path → skip entirely. (Was the main source
+        # of false "Önünüzde araç var".)
+        if zone.class_id in (ClassID.VEHICLE, ClassID.DYNAMIC_HAZARD):
+            near = (zone.estimated_distance_m is not None
+                    and zone.estimated_distance_m < RELEVANCE_DISTANCE_M)
+            in_corridor = zone.corridor_overlap >= CORRIDOR_INTRUSION_RATIO
+            if not (near or in_corridor):
+                continue
+
+        # Forward-path blocking hint: a hazard that actually intrudes the near
+        # corridor, is close enough, and leaves little walkable room to route
+        # around it. The dispatcher uses this to escalate a calm "var" notice
+        # to an actionable dodge. Wording is rendered later (zone/proximity
+        # hysteresis) so it does not flicker frame-to-frame.
+        in_corridor = zone.corridor_overlap >= CORRIDOR_INTRUSION_RATIO
+        near_enough = (zone.estimated_distance_m is None
+                       or zone.estimated_distance_m < RELEVANCE_DISTANCE_M)
+        blocks_path = (in_corridor and near_enough
+                       and scene.walkable_ratio < BLOCK_WALKABLE_RATIO)
 
         # Concise fallback / log text. The spoken message is re-rendered by
         # PerceptionService from the structured fields below.

@@ -80,6 +80,8 @@ class RecorderConfig:
     checkpoint_interval_s: float = 30.0  # Rolling summary_partial.md rewrite period.
     queue_maxsize: int = 200             # Bounded queue; full -> drop (OOM protection).
     min_free_mb: int = 500               # Refuse to record below this free disk space.
+    recent_events_max: int = 5000        # In-RAM window for the rolling checkpoint
+                                         # preview; final summary reads events.jsonl.
 
 
 @dataclass

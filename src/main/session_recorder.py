@@ -14,6 +14,7 @@ enqueue events. Queue is bounded — drops on overflow instead of OOM.
 Without --record, build_recorder() returns NullRecorder (no-op).
 """
 
+import collections
 import glob
 import json
 import logging
@@ -141,25 +142,37 @@ _INA3221_FALLBACK_DIR = "/sys/bus/i2c/drivers/ina3221x/6-0040/iio:device0"
 
 
 def _read_power_rails() -> dict:
-    """Read INA3221 rail power in mW → {rail_label: mW, ..., 'total': mW}."""
-    candidates = glob.glob("/sys/bus/i2c/devices/*/iio:device*/in_power*_input")
-    candidates += glob.glob("/sys/bus/i2c/drivers/ina3221*/*/iio:device*/in_power*_input")
-    for ch in (0, 1, 2):  # explicit JetPack 4.6.x fallback
-        candidates.append(os.path.join(_INA3221_FALLBACK_DIR, f"in_power{ch}_input"))
+    """Read INA3221 rail power in mW → {rail_label: mW, ..., 'total': mW}.
+
+    Iterates the iio:device dirs and reads ONLY ``in_power<N>_input`` for N in
+    0..2 — deliberately NOT a ``in_power*_input`` glob, which also matches
+    ``in_power0_trigger_input`` (not a power value). Rail labels come from
+    ``rail_name_<N>`` (e.g. POM_5V_IN / POM_5V_GPU / POM_5V_CPU on the Nano).
+    """
+    dirs = glob.glob("/sys/bus/i2c/devices/*/iio:device*")
+    dirs += glob.glob("/sys/bus/i2c/drivers/ina3221*/*/iio:device*")
+    dirs.append(_INA3221_FALLBACK_DIR)
 
     rails: dict = {}
-    for path in candidates:
-        if not os.path.exists(path):
+    seen: set = set()
+    for d in dirs:
+        if not os.path.isdir(d):
             continue
-        mw = _read_int_file(path)
-        if mw is None:
+        real = os.path.realpath(d)  # devices/ and drivers/ symlink to the same node
+        if real in seen:
             continue
-        base = os.path.dirname(path)
-        ch = os.path.basename(path).replace("in_power", "").replace("_input", "")
-        label = (_read_text_file(os.path.join(base, f"in_power{ch}_label"))
-                 or _read_text_file(os.path.join(base, f"rail_name_{ch}"))
-                 or f"rail{ch}")
-        rails[label] = mw  # same physical device via symlinks → key overwrite, no dupes
+        seen.add(real)
+        for ch in (0, 1, 2):
+            path = os.path.join(d, f"in_power{ch}_input")
+            if not os.path.exists(path):
+                continue
+            mw = _read_int_file(path)
+            if mw is None:
+                continue
+            label = (_read_text_file(os.path.join(d, f"rail_name_{ch}"))
+                     or _read_text_file(os.path.join(d, f"in_power{ch}_label"))
+                     or f"rail{ch}")
+            rails[label] = mw
 
     if rails and "total" not in rails:
         in_rail = next((v for k, v in rails.items() if "IN" in k.upper()), None)
@@ -223,7 +236,10 @@ class SessionRecorder:
 
         self._events_path = self.session_dir / "events.jsonl"
         self._events_file = open(self._events_path, "a", buffering=1)  # line-buffered
-        self._events: list = []                 # in-memory copy for the summary
+        # Bounded in-memory window for the rolling checkpoint preview only. The
+        # authoritative final summary is rebuilt from events.jsonl on disk at
+        # finalize(), so memory stays flat over a multi-hour walk.
+        self._recent = collections.deque(maxlen=self._rc.recent_events_max)
 
         self._lock = threading.Lock()
         self._q: "queue.Queue" = queue.Queue(maxsize=self._rc.queue_maxsize)
@@ -378,7 +394,7 @@ class SessionRecorder:
                 if kind == "event":
                     self._events_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
                     with self._lock:
-                        self._events.append(payload)
+                        self._recent.append(payload)
                 elif kind == "frame":
                     self._write_frame(payload)
             except Exception:
@@ -410,7 +426,7 @@ class SessionRecorder:
             try:
                 self._events_file.write(json.dumps(ev, ensure_ascii=False) + "\n")
                 with self._lock:
-                    self._events.append(ev)
+                    self._recent.append(ev)
                     self._dropped_reported = dropped
             except Exception:
                 logger.exception("[Recorder] drop-report write failed")
@@ -418,7 +434,7 @@ class SessionRecorder:
     def _write_checkpoint(self) -> None:
         try:
             with self._lock:
-                events = list(self._events)
+                events = list(self._recent)  # recent window — a live preview
             (self.session_dir / "summary_partial.md").write_text(
                 build_summary(events, title="ALAS Field Test (in-progress checkpoint)"),
                 encoding="utf-8",
@@ -486,6 +502,27 @@ class SessionRecorder:
         except Exception:
             logger.exception("[Recorder] session.json write failed")
 
+    def _read_events_file(self) -> list:
+        """Re-read events.jsonl from disk (authoritative, memory-safe).
+
+        Tolerant of a truncated last line (power-cut). Used by finalize so the
+        final summary is complete regardless of the bounded in-RAM window.
+        """
+        events: list = []
+        try:
+            with open(self._events_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        events.append(json.loads(line))
+                    except Exception:  # noqa: BLE001 — skip a truncated/corrupt line
+                        pass
+        except Exception:  # noqa: BLE001
+            logger.exception("[Recorder] re-reading events.jsonl failed")
+        return events
+
     def finalize(self) -> None:
         """Flush, stop threads, and write the final summary + GPX track."""
         self.log_system(event="session_end")
@@ -494,8 +531,12 @@ class SessionRecorder:
             self._writer.join(timeout=5.0)
         except Exception:
             pass
-        with self._lock:
-            events = list(self._events)
+        try:
+            self._events_file.flush()
+        except Exception:
+            pass
+        # Authoritative, complete summary from disk (not the bounded RAM window).
+        events = self._read_events_file()
         try:
             (self.session_dir / "summary.md").write_text(
                 build_summary(events, title="ALAS Field Test Report"), encoding="utf-8")

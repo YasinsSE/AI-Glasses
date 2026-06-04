@@ -105,6 +105,11 @@ class PerceptionService(threading.Thread):
         # Tracks safety-level transitions for "Yol açık" announcement.
         self._last_safe_announce_at: float = -999.0
         self._prev_safety_level: int = -1  # -1 = unknown (first frame)
+        # Closing-threat tracking: frame-to-frame walkable / distance of the top
+        # obstacle, so a rapidly approaching hazard re-warns even when its
+        # situation signature is unchanged.
+        self._prev_walkable: Optional[float] = None
+        self._prev_top_distance: Optional[float] = None
         # Loop heartbeat for the stall watchdog (set each iteration).
         self._last_heartbeat: float = 0.0
         self.model_ready = threading.Event()
@@ -502,21 +507,47 @@ class PerceptionService(threading.Thread):
         )
         escalate_now = escalate and not self._sig_escalated
 
+        # ── Closing-threat detection ────────────────────────────────────────
+        # A centre hazard whose signature does not change (already UNSAFE) would
+        # otherwise be silenced for ~20 s even while the user walks into it.
+        # Detect a rapidly closing gap (walkable collapsing, distance shrinking,
+        # or already imminent) and treat it as URGENT so we re-warn promptly.
+        ai = self._config.ai
+        dist = top_alert.distance_m
+        closing = False
+        if in_path or zone == "center":
+            walk_drop = ((self._prev_walkable - scene.walkable_ratio)
+                         if self._prev_walkable is not None else 0.0)
+            dist_drop = ((self._prev_top_distance - dist)
+                         if (self._prev_top_distance is not None and dist is not None) else 0.0)
+            imminent = dist is not None and dist < ai.imminent_distance_m
+            closing = (walk_drop >= ai.walkable_drop_urgent
+                       or dist_drop >= ai.closing_distance_urgent_m
+                       or imminent)
+        self._prev_walkable = scene.walkable_ratio
+        self._prev_top_distance = dist
+
         vfh_text = vfh.text if (escalate and can_dodge) else None
         message = self._render_message(top_alert, zone, band, scene, vfh_text, escalate)
+        # When closing fast and we have no actionable dodge, force a firm stop.
+        if closing and message and not (escalate and vfh_text):
+            message = "Dikkat, çok yakın, durun"
 
-        # ── Cadence: short on change/escalation, long when unchanged ────────
+        # ── Cadence: urgent on closing, short on change/escalation, long when unchanged ──
         sig_changed = sig != self._last_spoken_sig
         safety_increased = safety_level > self._last_safety
-        if sig_changed or escalate_now or safety_increased:
-            min_interval = self._config.ai.min_obstacle_interval_sec
+        if closing:
+            min_interval = ai.urgent_interval_sec          # override the 20 s repeat
+        elif sig_changed or escalate_now or safety_increased:
+            min_interval = ai.min_obstacle_interval_sec
         else:
-            min_interval = self._config.ai.min_obstacle_repeat_sec
+            min_interval = ai.min_obstacle_repeat_sec
         interval_ok = (now - self._last_obstacle_speak_at) >= min_interval
 
         spoke = False
         if interval_ok and message:
-            self._voice.say_obstacle(message)
+            # Closing threats are spoken faster + higher-pitched (urgent prosody).
+            self._voice.say_obstacle(message, urgent=closing)
             self._last_obstacle_speak_at = now
             self._last_spoken_sig = sig
             self._last_safety = safety_level
@@ -550,6 +581,8 @@ class PerceptionService(threading.Thread):
         self._zone_state.clear()
         self._band_state.clear()
         self._last_obstacle_speak_at = 0.0
+        self._prev_walkable = None
+        self._prev_top_distance = None
 
     def _stabilize_zone(self, class_id: int, zone: str) -> str:
         """Hysteresis on the dominant zone: a new zone must persist two frames

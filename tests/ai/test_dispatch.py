@@ -31,7 +31,7 @@ class FakeVoice:
     def __init__(self):
         self.said = []
 
-    def say_obstacle(self, text):
+    def say_obstacle(self, text, urgent=False):
         self.said.append(text)
 
 
