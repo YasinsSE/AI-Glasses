@@ -8,9 +8,9 @@
 import logging
 import time
 
-from models import Coord, RouteStatus
-from nav_config import NavConfig
-from navigator import NavigationSystem
+from src.navigation.router.models import Coord, RouteStatus
+from src.navigation.router.nav_config import NavConfig
+from src.navigation.router.navigator import NavigationSystem
 
 # from .models import Coord, RouteStatus
 # from .nav_config import NavConfig
@@ -38,15 +38,8 @@ config = NavConfig(
 # Simulation coordinates (Sıhhiye → Kurtuluş, Ankara)
 # ------------------------------------------------------------------
 test_locations = [
-    Coord(39.92409,  32.845382),   # Start
-    Coord(39.9240467, 32.8451522), # Step 1: straight
-    Coord(39.9232599, 32.8441792), # Step 2: straight
-    Coord(39.9240102, 32.8452347), # Step 3: turn begins
-    Coord(39.9249406, 32.8462865), # Step 4: straight
-    Coord(39.9254588, 32.8477125), # Step 5: turn right
-    Coord(39.9208164, 32.8533392), # Step 6: long walk (sharp left)
-    Coord(39.920927,  32.8533893), # Step 7: sharp left
-    Coord(39.9210086, 32.8529793), # Step 8: arrival
+    Coord(39.9919, 32.8649),   # Start
+    Coord(39.9887, 32.8635), # Step 8: arrival
 ]
 
 ORIGIN      = test_locations[0]
@@ -56,13 +49,13 @@ DESTINATION = test_locations[-1]
 def main() -> None:
     # 1. Boot system (loads OSM map once)
     start_boot = time.perf_counter()
-    nav = NavigationSystem("map.osm", config=config)
+    nav = NavigationSystem("/home/alas/ALAS_PROJECT/AI-Glasses/src/navigation/router/map.osm", config=config)
     end_boot = time.perf_counter()
     print(f"[*] Harita yüklenme süresi: {end_boot - start_boot:.4f}saniye")
     # 2. Request a route
     start_boot = time.perf_counter()
-    success, msg, poi = nav.navigate_to_nearest(ORIGIN, "okul")
-    #success, msg = nav.start_navigation(ORIGIN, DESTINATION)
+    #success, msg, poi = nav.navigate_to_nearest(ORIGIN, "okul")
+    success, msg = nav.start_navigation(ORIGIN, DESTINATION)
     end_boot = time.perf_counter()
     if not success:
         print(f"[Main] Could not start navigation: {msg}")

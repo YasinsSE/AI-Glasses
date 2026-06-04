@@ -1,0 +1,39 @@
+{
+  "saved_at": "2026-06-04T14:01:45.825975",
+  "step_count": 3,
+  "steps": [
+    {
+      "step_id": 0,
+      "text": "Rota başlıyor. Foça Sokağı üzerindesiniz",
+      "location": {
+        "lat": 39.9900265,
+        "lon": 32.8634477
+      },
+      "action": "start",
+      "distance_meters": 0,
+      "road_name": "Foça Sokağı"
+    },
+    {
+      "step_id": 1,
+      "text": "sert sola dönün",
+      "location": {
+        "lat": 39.9897521,
+        "lon": 32.8631438
+      },
+      "action": "turn_left",
+      "distance_meters": 40,
+      "road_name": "Çekirge Caddesi"
+    },
+    {
+      "step_id": 2,
+      "text": "Hedefinize ulaştınız",
+      "location": {
+        "lat": 39.9889249,
+        "lon": 32.8639472
+      },
+      "action": "finish",
+      "distance_meters": 114,
+      "road_name": null
+    }
+  ]
+}

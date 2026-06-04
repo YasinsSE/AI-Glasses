@@ -76,7 +76,7 @@ LAUNCH_CMD = [
     "--record",
     "--auto-standby",
     # Test destination - A PTT press re-routes here from the current spot.
-    "--auto-nav-coord", "39.921555,32.844175",
+    "--auto-nav-coord", "39.988679,32.863508",
 ]
 
 logger = logging.getLogger("ALAS.launcher")
