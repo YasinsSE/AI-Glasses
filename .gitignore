@@ -48,7 +48,7 @@ data/
 datasets/
 *.pkl
 aktif_rota.json
-
+src/navigation/router/active_route.json
 # Audio & Media
 *.wav
 *.mp3

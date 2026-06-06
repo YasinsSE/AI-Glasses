@@ -38,8 +38,10 @@ config = NavConfig(
 # Simulation coordinates (Sıhhiye → Kurtuluş, Ankara)
 # ------------------------------------------------------------------
 test_locations = [
+    Coord(39.924134, 32.845449),
     Coord(39.9919, 32.8649),   # Start
     Coord(39.9887, 32.8635), # Step 8: arrival
+    Coord(39.926414, 32.844915),
 ]
 
 ORIGIN      = test_locations[0]

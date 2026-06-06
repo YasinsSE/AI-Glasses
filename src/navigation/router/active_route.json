@@ -1,38 +1,93 @@
 {
-  "saved_at": "2026-06-04T14:01:45.825975",
-  "step_count": 3,
+  "saved_at": "2026-06-06T16:02:33.971254",
+  "step_count": 8,
   "steps": [
     {
       "step_id": 0,
-      "text": "Rota başlıyor. Foça Sokağı üzerindesiniz",
+      "text": "Rota başlıyor. Şehit Gönenç Caddesi üzerindesiniz",
       "location": {
-        "lat": 39.9900265,
-        "lon": 32.8634477
+        "lat": 39.9242103,
+        "lon": 32.8454521
       },
       "action": "start",
       "distance_meters": 0,
-      "road_name": "Foça Sokağı"
+      "road_name": "Şehit Gönenç Caddesi"
     },
     {
       "step_id": 1,
-      "text": "sert sola dönün",
+      "text": "sola dönün",
       "location": {
-        "lat": 39.9897521,
-        "lon": 32.8631438
+        "lat": 39.9240102,
+        "lon": 32.8452347
       },
       "action": "turn_left",
-      "distance_meters": 40,
-      "road_name": "Çekirge Caddesi"
+      "distance_meters": 28,
+      "road_name": "Şehit Gönenç Caddesi"
     },
     {
       "step_id": 2,
+      "text": "sert sağa dönün",
+      "location": {
+        "lat": 39.9233159,
+        "lon": 32.8443144
+      },
+      "action": "turn_right",
+      "distance_meters": 111,
+      "road_name": "Unnamed road"
+    },
+    {
+      "step_id": 3,
+      "text": "sert sağa dönün",
+      "location": {
+        "lat": 39.9233701,
+        "lon": 32.8442722
+      },
+      "action": "turn_right",
+      "distance_meters": 7,
+      "road_name": "Unnamed road"
+    },
+    {
+      "step_id": 4,
+      "text": "sola dönün",
+      "location": {
+        "lat": 39.9240467,
+        "lon": 32.8451522
+      },
+      "action": "turn_left",
+      "distance_meters": 107,
+      "road_name": "Şehit Gönenç Caddesi"
+    },
+    {
+      "step_id": 5,
+      "text": "sert sola dönün",
+      "location": {
+        "lat": 39.9244955,
+        "lon": 32.8456618
+      },
+      "action": "turn_left",
+      "distance_meters": 66,
+      "road_name": "Süleyman Bey Sokak"
+    },
+    {
+      "step_id": 6,
+      "text": "sert sağa dönün",
+      "location": {
+        "lat": 39.9259057,
+        "lon": 32.8441186
+      },
+      "action": "turn_right",
+      "distance_meters": 204,
+      "road_name": "Şehit Bahadir Demir Sokak"
+    },
+    {
+      "step_id": 7,
       "text": "Hedefinize ulaştınız",
       "location": {
-        "lat": 39.9889249,
-        "lon": 32.8639472
+        "lat": 39.9264923,
+        "lon": 32.8449791
       },
       "action": "finish",
-      "distance_meters": 114,
+      "distance_meters": 98,
       "road_name": null
     }
   ]
