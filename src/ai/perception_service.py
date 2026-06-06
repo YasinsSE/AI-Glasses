@@ -110,6 +110,9 @@ class PerceptionService(threading.Thread):
         # situation signature is unchanged.
         self._prev_walkable: Optional[float] = None
         self._prev_top_distance: Optional[float] = None
+        # Path-keeping (Faz 2): last guidance line + when it was spoken.
+        self._last_path_speak_at: float = -999.0
+        self._last_path_text: Optional[str] = None
         # Loop heartbeat for the stall watchdog (set each iteration).
         self._last_heartbeat: float = 0.0
         self.model_ready = threading.Event()
@@ -468,26 +471,23 @@ class PerceptionService(threading.Thread):
         # here — the signature cadence below decides what reaches the user.
         vfh = self._vfh_plan(result, nav_active)
 
-        # ── No obstacle alert: fall back to directional guidance ────────────
-        if top_alert is None:
-            guidance_text = self._vfh_standalone_text(vfh, now)
-            if guidance_text is None:
-                guidance_text = self._select_path_guidance(
-                    result.path_guidance, nav_active, now,
-                )
-            spoke = False
-            if (guidance_text
-                    and (now - self._last_obstacle_speak_at)
-                    >= self._config.ai.min_obstacle_interval_sec):
-                self._voice.say_obstacle(guidance_text)
-                self._last_obstacle_speak_at = now
-                spoke = True
-            self._rec.log_perception(result, chosen=guidance_text if spoke else None)
+        # Stabilise the top alert's zone and decide whether it BLOCKS the
+        # forward centerline. Only a centerline block drives a stop/dodge — a
+        # car off to the side must not interrupt path-keeping. (Faz 2.)
+        cid = top_alert.class_id if top_alert is not None else None
+        zone = self._stabilize_zone(cid, top_alert.zone) if top_alert is not None else "center"
+        in_path = top_alert is not None and zone == "center" and top_alert.blocks_path
+
+        # ── PATH-KEEPING (balanced UX) ──────────────────────────────────────
+        # Nothing blocks the path ahead → keep the user on the sidewalk instead
+        # of announcing every passing side car / parallel road.
+        if not in_path:
+            self._prev_walkable = scene.walkable_ratio
+            self._prev_top_distance = top_alert.distance_m if top_alert is not None else None
+            self._emit_path_keeping(result, now, nav_active)
             return
 
-        # ── Obstacle present: stabilise wording, build signature ────────────
-        cid = top_alert.class_id
-        zone = self._stabilize_zone(cid, top_alert.zone)
+        # ── CENTERLINE BLOCK: obstacle warning + closing + dodge ────────────
         band = self._proximity_band(cid, top_alert.distance_m, top_alert.pixel_ratio)
         sig = (cid, zone, safety_level)
 
@@ -497,12 +497,10 @@ class PerceptionService(threading.Thread):
             self._sig_escalated = False
             self._in_path_frames = 0
 
-        in_path = (zone == "center") and top_alert.blocks_path
-        self._in_path_frames = self._in_path_frames + 1 if in_path else 0
+        self._in_path_frames += 1  # in_path is True in this branch
         can_dodge = vfh is not None and bool(getattr(vfh, "text", None))
         escalate = (
-            in_path
-            and self._in_path_frames >= self._config.ai.escalation_frames
+            self._in_path_frames >= self._config.ai.escalation_frames
             and can_dodge
         )
         escalate_now = escalate and not self._sig_escalated
@@ -569,6 +567,44 @@ class PerceptionService(threading.Thread):
                 sig, escalate, scene.walkable_ratio * 100.0, result.inference_ms,
             )
 
+    def _emit_path_keeping(self, result, now: float, nav_active: bool) -> None:
+        """Keep the user on the walkable corridor (Faz 2 balanced UX).
+
+        Periodic "Düz devam edin" when centred on the path, prompt "Hafif
+        sola/sağa, yolun ortasına" on real drift, and a caution when the
+        corridor narrows. Yields the voice to active turn-by-turn navigation.
+        """
+        ai = self._config.ai
+        corridor = getattr(result, "corridor", None)
+
+        if (corridor is None or not corridor.valid
+                or corridor.free_ratio < ai.path_min_free_ratio):
+            text, on_path = "Yürünebilir alan azalıyor, dikkatli ilerleyin", False
+        else:
+            off = corridor.offset
+            if abs(off) <= ai.centerline_drift_warn:
+                text, on_path = "Düz devam edin", True
+            elif off < 0:
+                text, on_path = "Hafif sola, yolun ortasına", False
+            else:
+                text, on_path = "Hafif sağa, yolun ortasına", False
+
+        interval = (ai.path_confirm_interval_sec if on_path
+                    else ai.path_correct_interval_sec)
+        changed = text != self._last_path_text
+        if not (changed or (now - self._last_path_speak_at) >= interval):
+            self._rec.log_perception(result, chosen=None)
+            return
+
+        self._last_path_speak_at = now
+        self._last_path_text = text
+        # Active navigation owns the voice for direction — don't double-talk.
+        if not nav_active:
+            self._voice.say_obstacle(text)
+            self._rec.log_perception(result, chosen=text)
+        else:
+            self._rec.log_perception(result, chosen=None)
+
     # ── Situation helpers ────────────────────────────────────────
 
     def _reset_situation(self) -> None:
@@ -583,6 +619,7 @@ class PerceptionService(threading.Thread):
         self._last_obstacle_speak_at = 0.0
         self._prev_walkable = None
         self._prev_top_distance = None
+        self._last_path_text = None
 
     def _stabilize_zone(self, class_id: int, zone: str) -> str:
         """Hysteresis on the dominant zone: a new zone must persist two frames

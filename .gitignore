@@ -75,3 +75,5 @@ src/tts_stt/slm_onnx/
 
 # ONNX conversion helper script (dev-only tool, not part of the runtime)
 convert_to_onnx.py
+
+paper/

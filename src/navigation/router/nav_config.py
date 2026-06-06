@@ -37,12 +37,18 @@ class NavConfig:
 
     # Progress tracking
     waypoint_threshold_m: float = 15.0     # Distance to mark a waypoint as reached.
-    off_route_threshold_m: float = 40.0    # Extra metres beyond step distance -> off-route.
+    off_route_threshold_m: float = 60.0    # Extra metres beyond step distance -> off-route.
+                                           # Raised: brittle on poor pedestrian maps; the
+                                           # destination-progress check below is the real signal.
 
     # Navigation announcement cadence (consumed by NavigationService)
     approach_threshold_m: float = 30.0       # Pre-warn when distance to next step < N.
     long_stretch_threshold_m: float = 100.0  # > N -> fall back to the periodic reminder.
-    progress_announce_interval: float = 30.0  # "X metres to go" reminder period.
+    progress_announce_interval: float = 25.0  # positive "on track" / distance reminder period.
+
+    # Destination-progress (Faz 2): "are we actually getting closer to the target?"
+    progress_window_sec: float = 20.0      # sliding window over which to judge progress.
+    wrong_way_gain_m: float = 25.0         # moved this much FARTHER over the window -> wrong way.
 
     # Route file output
     log_dir: str = _ROUTER_DIR             # always src/navigation/router/

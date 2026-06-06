@@ -21,7 +21,7 @@ if str(_SRC) not in sys.path:
 
 from ai.ai_config import AIConfig
 from ai.perception import (
-    Alert, ClassID, SceneAnalysis,
+    Alert, ClassID, CorridorInfo, SceneAnalysis,
     SAFETY_SAFE, SAFETY_CAUTION, SAFETY_UNSAFE,
 )
 from ai.perception_service import PerceptionService
@@ -73,6 +73,7 @@ def _result(class_id, zone, walkable, safety, blocks_path,
     return SimpleNamespace(
         alerts=[alert], scene=scene, mask=None,
         inference_ms=100.0, total_ms=150.0, path_guidance=None,
+        corridor=CorridorInfo(valid=True, offset=0.0, free_ratio=0.5),
     )
 
 

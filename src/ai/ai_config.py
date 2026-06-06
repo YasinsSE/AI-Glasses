@@ -45,10 +45,15 @@ class AIConfig:
     # avoids overwhelming the user with TTS alerts.
     perception_fps: float = 2.0
 
-    # Camera mounting geometry (consumed by ai/geometry.py).
+    # Camera mounting geometry (consumed by ai/geometry.py for distance estimation).
+    # These are config variables — adjust once the final rig is fixed.
+    # ⚠ Hardware is an IMX219-120 (120° lens) in csi_sensor_mode 4 (1280×720, a
+    #   cropped readout), so the effective VERTICAL FOV is neither 120 nor a clean
+    #   60. The value below is an estimate; for accurate distances CALIBRATE
+    #   empirically (place an object at a known distance, tune vfov/tilt to match).
     camera_height_m: float = 1.65   # Glasses-mounted camera height above ground.
     camera_tilt_deg: float = 5.0    # Positive = camera tilted downwards.
-    camera_vfov_deg: float = 60.0   # Vertical field of view.
+    camera_vfov_deg: float = 60.0   # Vertical field of view (CALIBRATE — see note above).
 
     # Perception dispatcher cadences.
     obstacle_dedupe_ttl_sec: float = 12.0    # Re-allow the same situation after N s.
@@ -73,6 +78,14 @@ class AIConfig:
     walkable_drop_urgent: float = 0.12      # walkable_ratio dropping ≥ this between
                                             # frames = rapidly closing
     closing_distance_urgent_m: float = 0.8  # distance shrinking ≥ this between frames
+
+    # ── Path-keeping (Faz 2) ─────────────────────────────────────────────────
+    # When nothing blocks the centerline ahead, keep the user on the walkable
+    # corridor instead of announcing every side car.
+    path_min_free_ratio: float = 0.10         # below this corridor free ratio → "narrowing"
+    centerline_drift_warn: float = 0.40       # |offset| above this → "hafif sola/sağa"
+    path_confirm_interval_sec: float = 10.0   # periodic "Düz devam edin" when centred
+    path_correct_interval_sec: float = 5.0    # min gap between drift corrections
 
     # ── Situation tracking / escalation ──────────────────────────────────
     # A hazard must persist in the forward path for this many consecutive

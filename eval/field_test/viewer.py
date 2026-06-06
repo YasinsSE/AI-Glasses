@@ -116,7 +116,7 @@ _CARD_TMPL = """
   <img src="{img_path}" loading="lazy" alt="frame {seq}">
   <div class="card-body">
     <div class="card-time">
-      Frame #{seq} &nbsp;·&nbsp; <strong>{wall}</strong> &nbsp;·&nbsp; tag: {tag}
+      Frame #{seq} &nbsp;·&nbsp; <strong>{wall}</strong>
     </div>
     {perc_block}
     {speaks_block}
@@ -130,7 +130,6 @@ def _perc_block(perc_ev):
     if not perc_ev:
         return ""
     w = perc_ev.get("walkable", 0)
-    hazard = perc_ev.get("hazard") or "—"
     sl = perc_ev.get("safety_level")
     if sl is None:
         sl = 0 if perc_ev.get("is_safe") else 2
@@ -141,7 +140,7 @@ def _perc_block(perc_ev):
     else:
         badge = '<span class="unsafe-badge">UNSAFE</span>'
     return (f'<div class="card-perc">{badge} '
-            f'walkable: <strong>{w:.1%}</strong> &nbsp; hazard: <strong>{_esc(hazard)}</strong></div>')
+            f'walkable: <strong>{w:.1%}</strong></div>')
 
 
 def _speaks_block(speaks):

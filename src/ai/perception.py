@@ -183,6 +183,20 @@ class Alert:
 
 
 @dataclass
+class CorridorInfo:
+    """Walkable-corridor geometry for path-keeping (Faz 2).
+
+    Drives "stay on the sidewalk" guidance: where the open walkable area is
+    relative to the user's heading, how much free width remains, and whether
+    the road sits straight ahead (vs merely off to the side).
+    """
+    valid: bool = False        # False when there is no walkable area to follow
+    offset: float = 0.0        # −1 (open path is to the LEFT) .. +1 (to the RIGHT)
+    free_ratio: float = 0.0    # walkable share of the near corridor
+    road_ahead: float = 0.0    # vehicle_road share of the central FORWARD band
+
+
+@dataclass
 class PerceptionResult:
     """Everything the main loop needs from a single frame."""
     alerts: list                 # List[Alert], priority-sorted (highest first)
@@ -191,6 +205,7 @@ class PerceptionResult:
     inference_ms: float          # TRT/ONNX inference time
     total_ms: float              # full pipeline time
     path_guidance: Optional[str] = None  # directional walking instruction, or None
+    corridor: Optional[CorridorInfo] = None  # path-keeping geometry (Faz 2)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -646,6 +661,7 @@ def generate_alerts(
     scene: SceneAnalysis,
     last_alert_time: dict,
     now: float,
+    corridor: Optional[CorridorInfo] = None,
 ) -> list:
     """Build priority-sorted ``Alert`` candidates from a scene analysis.
 
@@ -691,6 +707,14 @@ def generate_alerts(
             is_center = zone.dominant_zone == "center"
             is_close = zone.pixel_ratio > VERY_CLOSE_RATIO
             if not (is_center or is_close):
+                continue
+
+        # ── vehicle_road path-relative gate (Faz 2) ─────────────────────────
+        # The road is almost always visible BESIDE a sidewalk; warning every
+        # time is spam. Only warn when the road is straight AHEAD (you are
+        # heading into it / a crossing), i.e. it fills the central forward band.
+        if zone.class_id == ClassID.VEHICLE_ROAD:
+            if corridor is None or corridor.road_ahead < ROAD_AHEAD_WARN:
                 continue
 
         # ── Relevance gate (Faz 1) ──────────────────────────────────────────
@@ -739,6 +763,50 @@ PATH_BOTTOM_FRACTION   = 0.5   # Look at the bottom half of the mask (ground nea
 CORRIDOR_MARGIN        = 0.15  # Ignore this many pixels on the left/right edges —
                                 # the user will not walk into the very edge anyway.
 MIN_WALKABLE_FOR_GUIDANCE = 0.08  # Below this corridor ratio, warn that the path is narrowing.
+# Central FORWARD band of the corridor (fraction of corridor width). Used to tell
+# "road straight ahead" (you're heading into it) from "road off to the side".
+CENTERLINE_BAND_FRAC   = 0.34
+# vehicle_road share of the central forward band above which we warn "araç yolu".
+ROAD_AHEAD_WARN        = 0.20
+
+
+def analyse_corridor(mask: np.ndarray) -> CorridorInfo:
+    """Path-keeping geometry from the walkable mask (Faz 2).
+
+    Looks at the near corridor (bottom half, centre 70%). Returns where the open
+    walkable area sits relative to the user's heading (``offset``: −1 left .. +1
+    right), how much free width remains (``free_ratio``), and how much of the
+    central forward band is vehicle road (``road_ahead`` — high only when the
+    road is straight ahead, not merely beside the sidewalk).
+    """
+    h, w = mask.shape
+    bottom_start = int(h * (1.0 - PATH_BOTTOM_FRACTION))
+    bottom = mask[bottom_start:, :]
+    c_left  = int(w * CORRIDOR_MARGIN)
+    c_right = int(w * (1.0 - CORRIDOR_MARGIN))
+    corridor = bottom[:, c_left:c_right]
+    cw = corridor.shape[1]
+    if cw <= 1 or corridor.size == 0:
+        return CorridorInfo(valid=False)
+
+    walkable = (corridor == int(ClassID.WALKABLE_SURFACE))
+    col_counts = walkable.sum(axis=0).astype(np.float64)   # walkable per column
+    total = float(col_counts.sum())
+    if total <= 0:
+        return CorridorInfo(valid=False)
+
+    free_ratio = total / float(corridor.size)
+    centroid = float((np.arange(cw) * col_counts).sum() / total)  # 0..cw-1
+    offset = (centroid / (cw - 1)) * 2.0 - 1.0                     # → −1..+1
+
+    cb_lo = int(cw * (0.5 - CENTERLINE_BAND_FRAC / 2.0))
+    cb_hi = int(cw * (0.5 + CENTERLINE_BAND_FRAC / 2.0))
+    central = corridor[:, cb_lo:cb_hi]
+    road_ahead = (float((central == int(ClassID.VEHICLE_ROAD)).sum()) / central.size
+                  if central.size else 0.0)
+
+    return CorridorInfo(valid=True, offset=offset, free_ratio=free_ratio,
+                        road_ahead=road_ahead)
 
 
 def generate_path_guidance(mask: np.ndarray) -> Optional[str]:
@@ -947,11 +1015,16 @@ class PerceptionPipeline:
         # 4. Scene analysis
         scene = analyse_scene(mask, camera_geom=self._camera_geometry)
 
-        # 5. Generate alert candidates (pure — cooldown is stamped by the
-        #    dispatcher only after an alert is actually spoken).
-        alerts = generate_alerts(scene, self._last_alert_time, now)
+        # 5. Corridor geometry for path-keeping (Faz 2).
+        corridor = analyse_corridor(mask)
 
-        # 6. Path guidance
+        # 6. Generate alert candidates (pure — cooldown is stamped by the
+        #    dispatcher only after an alert is actually spoken). Corridor lets
+        #    vehicle_road warn only when the road is straight ahead.
+        alerts = generate_alerts(scene, self._last_alert_time, now, corridor=corridor)
+
+        # 7. Path guidance text (fallback/logging; the dispatcher mainly uses
+        #    the structured corridor below).
         guidance = generate_path_guidance(mask)
 
         total_ms = (time.monotonic() - t_start) * 1000
@@ -963,6 +1036,7 @@ class PerceptionPipeline:
             inference_ms=inference_ms,
             total_ms=total_ms,
             path_guidance=guidance,
+            corridor=corridor,
         )
 
     def mark_alert_spoken(self, class_id: int, when: Optional[float] = None) -> None:

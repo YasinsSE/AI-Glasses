@@ -22,10 +22,13 @@ Event statuses (WAYPOINT_HIT, OFF_ROUTE, FINISHED) are spoken immediately,
 deduped on text so the same message does not repeat across GPS ticks.
 """
 
+import collections
 import logging
 import threading
 import time
 from typing import Optional
+
+from navigation.router.geo_utils import haversine_distance
 
 from main.config import ALASConfig
 from main.lifecycle import ModeManager, SystemMode
@@ -65,6 +68,10 @@ class NavigationService(threading.Thread):
         self._last_progress_time: float = 0.0
         self._prewarned_step_id: Optional[int] = None
         self._stale_announced: bool = False
+        # Destination-progress (Faz 2): are we actually getting closer to the
+        # final target? Robust to a mis-snapped OSM route geometry.
+        self._dest = None
+        self._dist_window: "collections.deque" = collections.deque()
 
     # ── Thread entry point ───────────────────────────────────────
 
@@ -74,6 +81,10 @@ class NavigationService(threading.Thread):
             if self._modes.mode != SystemMode.ACTIVE:
                 self._stop_event.wait(self._config.gps.update_interval)
                 continue
+
+            # Record GPS health every poll — even with no fix — so the black box
+            # shows satellite count / serial loss / dropouts during the walk.
+            self._log_gps_health()
 
             # When ACTIVE with no active route (environment-awareness mode), we
             # still poll GPS so the field-test recorder captures the track and
@@ -113,12 +124,26 @@ class NavigationService(threading.Thread):
                 self._stop_event.wait(self._config.gps.update_interval)
                 continue
 
-            self._announce(result)
+            self._announce(result, Coord(lat, lon))
             self._stop_event.wait(self._config.gps.update_interval)
 
         logger.info("[Navigation] Stopped.")
 
     # ── Announcement logic ───────────────────────────────────────
+
+    def _log_gps_health(self) -> None:
+        """Emit a GPS health snapshot to the recorder (visible even with no fix)."""
+        try:
+            h = self._gps.get_health()
+        except Exception:  # noqa: BLE001 — mock GPS or transient read error
+            return
+        self._rec.log_gps_status(
+            getattr(h, "status", None),
+            getattr(h, "satellites", None),
+            getattr(h, "hdop", None),
+            getattr(h, "serial_ok", None),
+            getattr(h, "fix_age_sec", None),
+        )
 
     def _report_activity(self, coord) -> None:
         """Feed the auto-STANDBY monitor with GPS speed/displacement + health."""
@@ -148,7 +173,40 @@ class NavigationService(threading.Thread):
             if utc is not None:
                 self._rec.note_gps_utc(utc[0], utc[1])
 
-    def _announce(self, result: ProgressResult) -> None:
+    def _destination_progress(self, position):
+        """Are we actually approaching the FINAL target? (Faz 2)
+
+        Returns ('on_track' | 'wrong_way' | None, dist_to_target_m). Compares the
+        straight-line distance to the destination over a sliding window, so it is
+        robust to a route whose node geometry does not match the real sidewalk.
+        """
+        route = self._nav.get_route()
+        if not route:
+            return None, None
+        dest = route[-1].location
+        now = time.monotonic()
+        d = haversine_distance(position.lat, position.lon, dest.lat, dest.lon)
+
+        # Reset the window when the destination changes (a new route).
+        if (self._dest is None
+                or haversine_distance(dest.lat, dest.lon, self._dest.lat, self._dest.lon) > 5.0):
+            self._dest = dest
+            self._dist_window.clear()
+        self._dist_window.append((now, d))
+        cutoff = now - self._config.nav.progress_window_sec
+        while len(self._dist_window) > 2 and self._dist_window[0][0] < cutoff:
+            self._dist_window.popleft()
+        if len(self._dist_window) < 2:
+            return None, d
+
+        delta = d - self._dist_window[0][1]   # +: moved away, −: got closer
+        if delta <= -2.0:
+            return "on_track", d
+        if delta >= self._config.nav.wrong_way_gain_m:
+            return "wrong_way", d
+        return None, d
+
+    def _announce(self, result: ProgressResult, position) -> None:
         step = result.current_step
         self._rec.log_nav(
             result.status.value if hasattr(result.status, "value") else result.status,
@@ -160,30 +218,33 @@ class NavigationService(threading.Thread):
             self._prewarned_step_id = None  # next step not yet pre-warned
             return
 
-        if result.status == RouteStatus.OFF_ROUTE:
-            self._speak_event("Rotadan çıktınız. Lütfen geri dönün.")
-            return
-
         if result.status == RouteStatus.FINISHED:
             self._speak_event("Hedefinize ulaştınız, iyi günler.")
+            return
+
+        prog, dist_to_tgt = self._destination_progress(position)
+
+        if result.status == RouteStatus.OFF_ROUTE:
+            # Route-node off-route is brittle on poor pedestrian maps (it fired
+            # constantly while the user walked straight toward the target). Only
+            # warn when destination-progress confirms we are moving AWAY.
+            if prog == "wrong_way":
+                self._speak_event("Yanlış yöne gidiyorsunuz, hedef geride kaldı.")
             return
 
         if result.status != RouteStatus.PROGRESSING:
             return
 
-        # PROGRESSING — three-tier delivery
         dist = result.distance_to_next
         step = result.current_step
         if dist is None or step is None:
             return
 
-        # (a) Approach pre-warning — fires once per step
+        # (a) Approach pre-warning — fires once per step (turn instruction).
         if (
             dist <= self._config.nav.approach_threshold_m
             and self._prewarned_step_id != step.step_id
         ):
-            # The "start" step is an intro ("Rota başlıyor. X üzerindesiniz"),
-            # not a turn — prefixing it with "N metre sonra" is nonsensical.
             if step.action == "start":
                 self._voice.say_nav(step.text)
             else:
@@ -192,13 +253,17 @@ class NavigationService(threading.Thread):
             self._last_spoken = step.text
             return
 
-        # (b) Long-stretch reminder — periodic distance ping
-        if dist >= self._config.nav.long_stretch_threshold_m:
-            now = time.monotonic()
-            if (now - self._last_progress_time) > self._config.nav.progress_announce_interval:
+        # (b) Destination-progress — positive confirmation / wrong-way / ping.
+        now = time.monotonic()
+        if prog == "wrong_way":
+            self._speak_event("Yanlış yöne gidiyorsunuz, hedef geride kaldı.")
+        elif (now - self._last_progress_time) > self._config.nav.progress_announce_interval:
+            if prog == "on_track" and dist_to_tgt is not None:
+                self._voice.say_progress(f"Doğru yoldasınız, hedefe {int(dist_to_tgt)} metre.")
+                self._last_progress_time = now
+            elif dist >= self._config.nav.long_stretch_threshold_m:
                 self._voice.say_progress(f"Hedefe {int(dist)} metre.")
                 self._last_progress_time = now
-        # (c) Mid-range silence — fall through, no speech.
 
     def _speak_event(self, text: str) -> None:
         if not text or text == self._last_spoken:
