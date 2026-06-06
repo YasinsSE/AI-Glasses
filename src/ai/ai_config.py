@@ -83,9 +83,29 @@ class AIConfig:
     # When nothing blocks the centerline ahead, keep the user on the walkable
     # corridor instead of announcing every side car.
     path_min_free_ratio: float = 0.10         # below this corridor free ratio → "narrowing"
-    centerline_drift_warn: float = 0.40       # |offset| above this → "hafif sola/sağa"
-    path_confirm_interval_sec: float = 10.0   # periodic "Düz devam edin" when centred
-    path_correct_interval_sec: float = 5.0    # min gap between drift corrections
+    centerline_drift_warn: float = 0.40       # smoothed |offset| above this → "hafif sola/sağa"
+    path_confirm_interval_sec: float = 25.0   # periodic "Düz devam edin" when centred (rare)
+    path_correct_interval_sec: float = 8.0    # min gap between drift corrections
+    # Faz 3 — quieter path-keeping + event-driven obstacle awareness.
+    offset_ema_alpha: float = 0.4             # EMA smoothing of the corridor offset (anti-flicker)
+    drift_clear_band: float = 0.25            # |offset| below this → back to "straight" (hysteresis)
+    drift_persist_frames: int = 2             # a new drift direction must persist this many frames
+    narrowing_cooldown_sec: float = 12.0      # min gap between "alan azalıyor" warnings
+    ambient_min_gap_sec: float = 12.0         # min gap before a NEW hazard awareness notice
+    # Per-(class,zone) re-arm: once a side hazard is announced, the SAME hazard is
+    # not re-announced for this long even if it briefly drops out of detection and
+    # reappears (a car flickering behind a pole must not read as "new"). Longer
+    # than ambient_min_gap_sec on purpose.
+    ambient_rearm_sec: float = 30.0
+
+    # ── Crossing detection (Faz 4) ───────────────────────────────────────────
+    # Road straight ahead with a walkable sidewalk beyond → an informational,
+    # CAUTIONARY notice ("…geçişte dikkatli olun"); never an assurance to cross.
+    # Geometric shields live in perception.py (CROSSING_*); these are the
+    # service-side temporal guard + master switch (turn OFF in the field if it
+    # ever false-fires toward traffic).
+    crossing_detection_enabled: bool = True
+    crossing_persist_frames: int = 3          # frames the candidate must persist before speaking
 
     # ── Situation tracking / escalation ──────────────────────────────────
     # A hazard must persist in the forward path for this many consecutive

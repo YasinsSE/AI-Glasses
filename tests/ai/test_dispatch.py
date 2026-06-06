@@ -60,7 +60,7 @@ def _service(vfh=None):
 
 
 def _result(class_id, zone, walkable, safety, blocks_path,
-            distance_m=4.0, pixel_ratio=0.1):
+            distance_m=4.0, pixel_ratio=0.1, crossing=False):
     alert = Alert(
         class_id=int(class_id), text="x", priority=5,
         zone=zone, distance_m=distance_m, pixel_ratio=pixel_ratio,
@@ -73,8 +73,62 @@ def _result(class_id, zone, walkable, safety, blocks_path,
     return SimpleNamespace(
         alerts=[alert], scene=scene, mask=None,
         inference_ms=100.0, total_ms=150.0, path_guidance=None,
-        corridor=CorridorInfo(valid=True, offset=0.0, free_ratio=0.5),
+        corridor=CorridorInfo(valid=True, offset=0.0, free_ratio=0.5,
+                              crossing=crossing),
     )
+
+
+def _no_unsafe_crossing_wording(said):
+    """A road/crossing notice must NEVER imply it is safe to cross."""
+    banned = ("geçebilir", "güvenli", "geçebilirsiniz")
+    return not any(b in s.lower() for s in said for b in banned)
+
+
+def test_road_ahead_is_cautionary_not_permissive():
+    """Road straight ahead (no crossing) → a caution, never a 'safe to cross'."""
+    svc, voice = _service()
+    import ai.perception_service as ps
+    t = [5000.0]
+    orig = ps.time.monotonic
+    ps.time.monotonic = lambda: t[0]
+    try:
+        svc._dispatch(_result(ClassID.VEHICLE_ROAD, "center", 0.3,
+                              SAFETY_CAUTION, False, crossing=False))
+        assert any("araç yolu" in s for s in voice.said), voice.said
+        assert _no_unsafe_crossing_wording(voice.said), voice.said
+    finally:
+        ps.time.monotonic = orig
+
+
+def test_crossing_announced_only_after_persistence():
+    """A crossing notice fires only after the candidate persists, and is a caution."""
+    svc, voice = _service()
+    import ai.perception_service as ps
+    t = [6000.0]
+    orig = ps.time.monotonic
+    ps.time.monotonic = lambda: t[0]
+    try:
+        # First frame: candidate seen but not yet confirmed → plain road caution.
+        svc._dispatch(_result(ClassID.VEHICLE_ROAD, "center", 0.3,
+                              SAFETY_CAUTION, False, crossing=True))
+        assert any("araç yolu" in s for s in voice.said), voice.said
+        assert not any("kaldırım" in s for s in voice.said), voice.said
+        # Hold the candidate; the road-event gap suppresses speech meanwhile,
+        # but the persistence counter keeps climbing.
+        t[0] += 0.5
+        svc._dispatch(_result(ClassID.VEHICLE_ROAD, "center", 0.3,
+                              SAFETY_CAUTION, False, crossing=True))
+        t[0] += 0.5
+        svc._dispatch(_result(ClassID.VEHICLE_ROAD, "center", 0.3,
+                              SAFETY_CAUTION, False, crossing=True))
+        # After the event gap, confirmed crossing upgrades the wording.
+        t[0] += svc._config.ai.ambient_min_gap_sec + 0.1
+        svc._dispatch(_result(ClassID.VEHICLE_ROAD, "center", 0.3,
+                              SAFETY_CAUTION, False, crossing=True))
+        assert any("karşı tarafta kaldırım" in s for s in voice.said), voice.said
+        assert _no_unsafe_crossing_wording(voice.said), voice.said
+    finally:
+        ps.time.monotonic = orig
 
 
 def test_same_situation_not_repeated_on_walkable_flicker():
@@ -86,37 +140,59 @@ def test_same_situation_not_repeated_on_walkable_flicker():
     orig = ps.time.monotonic
     ps.time.monotonic = svc_now
     try:
-        # First detection: vehicle on the left, UNSAFE.
-        svc._dispatch(_result(ClassID.VEHICLE, "left", 0.234, SAFETY_UNSAFE, False))
+        # First detection: vehicle blocking the centerline, UNSAFE.
+        svc._dispatch(_result(ClassID.VEHICLE, "center", 0.10, SAFETY_UNSAFE, True))
         assert len(voice.said) == 1, voice.said
-        # 5 s later: identical situation, only walkable changed 23%->36%.
+        # 5 s later: identical situation, only walkable flickered (no closing).
         t[0] += 5.0
-        svc._dispatch(_result(ClassID.VEHICLE, "left", 0.364, SAFETY_UNSAFE, False))
+        svc._dispatch(_result(ClassID.VEHICLE, "center", 0.11, SAFETY_UNSAFE, True))
         assert len(voice.said) == 1, ("repeated within repeat window", voice.said)
         # After the long repeat interval it may speak again.
         t[0] += svc._config.ai.min_obstacle_repeat_sec + 0.1
-        svc._dispatch(_result(ClassID.VEHICLE, "left", 0.30, SAFETY_UNSAFE, False))
+        svc._dispatch(_result(ClassID.VEHICLE, "center", 0.10, SAFETY_UNSAFE, True))
         assert len(voice.said) == 2, voice.said
     finally:
         ps.time.monotonic = orig
 
 
-def test_zone_change_speaks_again():
-    """Hazard moving left -> center is a new situation; should speak."""
+def test_ambient_side_obstacle_announced_once():
+    """A side hazard is announced once (Faz 3 awareness), not repeated unchanged."""
     svc, voice = _service()
     import ai.perception_service as ps
     t = [2000.0]
     orig = ps.time.monotonic
     ps.time.monotonic = lambda: t[0]
     try:
-        svc._dispatch(_result(ClassID.VEHICLE, "left", 0.2, SAFETY_UNSAFE, False))
-        assert len(voice.said) == 1
-        t[0] += 4.5  # past short interval, under repeat interval
-        # Zone needs two frames to flip (hysteresis), then a new signature.
-        svc._dispatch(_result(ClassID.VEHICLE, "center", 0.2, SAFETY_UNSAFE, True))
-        svc._dispatch(_result(ClassID.VEHICLE, "center", 0.2, SAFETY_UNSAFE, True))
-        assert len(voice.said) == 2, voice.said
-        assert "Önünüzde" in voice.said[1] or "Durun" in voice.said[1]
+        # Side car: not blocking centerline, not imminent → ambient notice, once.
+        svc._dispatch(_result(ClassID.VEHICLE, "right", 0.3, SAFETY_UNSAFE, False,
+                              distance_m=5.0, pixel_ratio=0.05))
+        assert any("Sağ taraf" in s for s in voice.said), voice.said
+        t[0] += 3.0  # same hazard shortly after → must NOT repeat the notice
+        svc._dispatch(_result(ClassID.VEHICLE, "right", 0.3, SAFETY_UNSAFE, False,
+                              distance_m=5.0, pixel_ratio=0.05))
+        assert sum("Sağ taraf" in s for s in voice.said) == 1, voice.said
+    finally:
+        ps.time.monotonic = orig
+
+
+def test_imminent_side_obstacle_warns():
+    """Walking into a very-close SIDE car must warn even off the centerline (Faz 3)."""
+    svc, voice = _service()
+    import ai.perception_service as ps
+    t = [3000.0]
+    orig = ps.time.monotonic
+    ps.time.monotonic = lambda: t[0]
+    try:
+        # Frame 1: side car at a distance (sets the previous distance baseline).
+        svc._dispatch(_result(ClassID.VEHICLE, "right", 0.3, SAFETY_UNSAFE, False,
+                              distance_m=4.0, pixel_ratio=0.08))
+        voice.said.clear()
+        # Frame 2: now very close AND closing (4 m -> 2 m) — must warn.
+        t[0] += 0.5
+        svc._dispatch(_result(ClassID.VEHICLE, "right", 0.3, SAFETY_UNSAFE, False,
+                              distance_m=2.0, pixel_ratio=0.12))
+        assert any("çok yakın" in s for s in voice.said), voice.said
+        assert any("sağ" in s.lower() for s in voice.said), voice.said
     finally:
         ps.time.monotonic = orig
 

@@ -116,9 +116,10 @@ class ALASConfig:
     live: bool = False                 # --live: one-line stdout dashboard.
     record_dir: str = "outputs/field_tests"
 
-    # ── Boot / warmup / sleep ────────────────────────────────────
+    # ── Boot / warmup ────────────────────────────────────────────
     warmup_timeout_sec: float = 60.0      # await_ready max wait before forcing ACTIVE.
-    sleep_idle_timeout_sec: float = 0.0   # 0 = never auto-sleep; >0 enables idle-sleep.
+    # NOTE: automatic power-saving lives in IdleConfig (--auto-standby), driven by
+    # the ActivityMonitor. There is no separate idle-sleep timeout.
 
     # ── Runtime flags (set by --mock / --no-camera / --bypass-*) ──
     mock: bool = False

@@ -12,7 +12,8 @@ import time
 from typing import Optional
 
 from ai.geometry import CameraGeometry
-from ai.perception import Alert, ClassID, PerceptionPipeline, SAFETY_SAFE, SAFETY_CAUTION, SAFETY_UNSAFE
+from ai.perception import (Alert, ClassID, PerceptionPipeline, VERY_CLOSE_RATIO,
+                           SAFETY_SAFE, SAFETY_CAUTION, SAFETY_UNSAFE)
 from main.config import ALASConfig
 from main.lifecycle import ModeManager, SystemMode
 from navigation.local_planner import VFHPlanner
@@ -113,6 +114,20 @@ class PerceptionService(threading.Thread):
         # Path-keeping (Faz 2): last guidance line + when it was spoken.
         self._last_path_speak_at: float = -999.0
         self._last_path_text: Optional[str] = None
+        # Path-keeping smoothing + ambient awareness (Faz 3).
+        self._offset_ema: Optional[float] = None
+        self._drift_dir: str = "straight"      # "left" | "right" | "straight"
+        self._drift_count: int = 0
+        # Ambient awareness (Faz 3/4): per-(class,zone) last-announce time gives a
+        # re-arm memory so a hazard that flickers out of detection and back is not
+        # re-announced as "new"; _last_ambient_at is the global min-gap.
+        self._ambient_last_at: dict = {}
+        self._last_ambient_at: float = -999.0
+        self._last_narrow_at: float = -999.0
+        # Crossing / road-ahead (Faz 4): consecutive crossing-candidate frames and
+        # the last time we voiced a road/crossing caution.
+        self._crossing_frames: int = 0
+        self._last_road_at: float = -999.0
         # Loop heartbeat for the stall watchdog (set each iteration).
         self._last_heartbeat: float = 0.0
         self.model_ready = threading.Event()
@@ -392,6 +407,16 @@ class PerceptionService(threading.Thread):
 
             self._dispatch(result, frame)
 
+            # Heartbeat overlay — guarantees a visual timeline regardless of what
+            # _dispatch decided to say. (_dispatch may save an event-tagged frame
+            # first; this is throttled by frame_min_interval_s so it only fills
+            # the gaps — e.g. long path-keeping stretches that never hit the
+            # obstacle branch, which previously left almost no frames saved.)
+            self._rec.maybe_save_overlay(
+                frame, result.mask, "scene",
+                info={"walkable": result.scene.walkable_ratio},
+            )
+
             # FPS health log — surfaces the case where inference itself is
             # already slower than the requested interval.
             frames_done += 1
@@ -471,70 +496,76 @@ class PerceptionService(threading.Thread):
         # here — the signature cadence below decides what reaches the user.
         vfh = self._vfh_plan(result, nav_active)
 
-        # Stabilise the top alert's zone and decide whether it BLOCKS the
-        # forward centerline. Only a centerline block drives a stop/dodge — a
-        # car off to the side must not interrupt path-keeping. (Faz 2.)
+        ai = self._config.ai
         cid = top_alert.class_id if top_alert is not None else None
         zone = self._stabilize_zone(cid, top_alert.zone) if top_alert is not None else "center"
         in_path = top_alert is not None and zone == "center" and top_alert.blocks_path
 
-        # ── PATH-KEEPING (balanced UX) ──────────────────────────────────────
-        # Nothing blocks the path ahead → keep the user on the sidewalk instead
-        # of announcing every passing side car / parallel road.
-        if not in_path:
-            self._prev_walkable = scene.walkable_ratio
-            self._prev_top_distance = top_alert.distance_m if top_alert is not None else None
-            self._emit_path_keeping(result, now, nav_active)
+        # Frame-to-frame CLOSING signal (computed up front so it gates both the
+        # imminent-side override and the in-path urgency). prev_* updated once.
+        dist = top_alert.distance_m if top_alert is not None else None
+        walk_drop = ((self._prev_walkable - scene.walkable_ratio)
+                     if self._prev_walkable is not None else 0.0)
+        dist_drop = ((self._prev_top_distance - dist)
+                     if (self._prev_top_distance is not None and dist is not None) else 0.0)
+        self._prev_walkable = scene.walkable_ratio
+        self._prev_top_distance = dist
+        closing = (walk_drop >= ai.walkable_drop_urgent
+                   or dist_drop >= ai.closing_distance_urgent_m)
+        is_close = (top_alert is not None and cid != int(ClassID.CROSSWALK)
+                    and ((dist is not None and dist < ai.imminent_distance_m)
+                         or top_alert.pixel_ratio > VERY_CLOSE_RATIO))
+
+        # Imminent SIDE override (Faz-2 safety gap fix): a close obstacle off the
+        # centerline only warns when we are actually CLOSING on it (walking into
+        # it) — NOT for parked cars we merely walk past at a constant distance.
+        imminent_side = (not in_path) and is_close and closing
+
+        # ── ROAD STRAIGHT AHEAD (Faz 4) ─────────────────────────────────────
+        # vehicle_road only becomes the top alert when no vehicle is relevant
+        # (vehicle outranks it). A road ahead is informational/cautionary, not a
+        # hard-stop loop — and may upgrade to a crossing notice. Handle it on its
+        # own event cadence and return.
+        if cid == int(ClassID.VEHICLE_ROAD):
+            self._emit_road_ahead(result, frame, now, nav_active)
             return
 
-        # ── CENTERLINE BLOCK: obstacle warning + closing + dodge ────────────
+        # ── PATH-KEEPING (balanced UX) ──────────────────────────────────────
+        # Nothing blocks the path AND nothing is imminently closing → keep the
+        # user on the sidewalk + occasional obstacle awareness (Faz 2/3).
+        if not (in_path or imminent_side):
+            self._emit_path_keeping(result, frame, now, nav_active, top_alert, zone)
+            return
+
+        # ── WARNING: centerline block OR imminent closing side obstacle ─────
         band = self._proximity_band(cid, top_alert.distance_m, top_alert.pixel_ratio)
         sig = (cid, zone, safety_level)
-
-        # Frame-to-frame continuity (drives escalation counting).
         if sig != self._cur_sig:
             self._cur_sig = sig
             self._sig_escalated = False
             self._in_path_frames = 0
-
-        self._in_path_frames += 1  # in_path is True in this branch
+        self._in_path_frames = self._in_path_frames + 1 if in_path else 0
         can_dodge = vfh is not None and bool(getattr(vfh, "text", None))
-        escalate = (
-            self._in_path_frames >= self._config.ai.escalation_frames
-            and can_dodge
-        )
+        escalate = (in_path and self._in_path_frames >= ai.escalation_frames and can_dodge)
         escalate_now = escalate and not self._sig_escalated
 
-        # ── Closing-threat detection ────────────────────────────────────────
-        # A centre hazard whose signature does not change (already UNSAFE) would
-        # otherwise be silenced for ~20 s even while the user walks into it.
-        # Detect a rapidly closing gap (walkable collapsing, distance shrinking,
-        # or already imminent) and treat it as URGENT so we re-warn promptly.
-        ai = self._config.ai
-        dist = top_alert.distance_m
-        closing = False
-        if in_path or zone == "center":
-            walk_drop = ((self._prev_walkable - scene.walkable_ratio)
-                         if self._prev_walkable is not None else 0.0)
-            dist_drop = ((self._prev_top_distance - dist)
-                         if (self._prev_top_distance is not None and dist is not None) else 0.0)
-            imminent = dist is not None and dist < ai.imminent_distance_m
-            closing = (walk_drop >= ai.walkable_drop_urgent
-                       or dist_drop >= ai.closing_distance_urgent_m
-                       or imminent)
-        self._prev_walkable = scene.walkable_ratio
-        self._prev_top_distance = dist
+        if in_path:
+            vfh_text = vfh.text if (escalate and can_dodge) else None
+            message = self._render_message(top_alert, zone, band, scene, vfh_text, escalate)
+            if closing and message and not (escalate and vfh_text):
+                message = "Dikkat, çok yakın, durun"
+        else:
+            # Imminent obstacle OFF the centerline → directional urgent warning.
+            noun = self._HAZARD_NOUN.get(cid, "engel")
+            message = "Dikkat, %s %s çok yakın" % (
+                self._SIDE_WORD_MID.get(zone, "önünüzde"), noun)
 
-        vfh_text = vfh.text if (escalate and can_dodge) else None
-        message = self._render_message(top_alert, zone, band, scene, vfh_text, escalate)
-        # When closing fast and we have no actionable dodge, force a firm stop.
-        if closing and message and not (escalate and vfh_text):
-            message = "Dikkat, çok yakın, durun"
+        urgent = closing or imminent_side
 
-        # ── Cadence: urgent on closing, short on change/escalation, long when unchanged ──
+        # ── Cadence: urgent overrides the repeat; else change/escalation/repeat ──
         sig_changed = sig != self._last_spoken_sig
         safety_increased = safety_level > self._last_safety
-        if closing:
+        if urgent:
             min_interval = ai.urgent_interval_sec          # override the 20 s repeat
         elif sig_changed or escalate_now or safety_increased:
             min_interval = ai.min_obstacle_interval_sec
@@ -544,8 +575,8 @@ class PerceptionService(threading.Thread):
 
         spoke = False
         if interval_ok and message:
-            # Closing threats are spoken faster + higher-pitched (urgent prosody).
-            self._voice.say_obstacle(message, urgent=closing)
+            # Closing / imminent threats are spoken faster + higher-pitched.
+            self._voice.say_obstacle(message, urgent=urgent)
             self._last_obstacle_speak_at = now
             self._last_spoken_sig = sig
             self._last_safety = safety_level
@@ -567,43 +598,134 @@ class PerceptionService(threading.Thread):
                 sig, escalate, scene.walkable_ratio * 100.0, result.inference_ms,
             )
 
-    def _emit_path_keeping(self, result, now: float, nav_active: bool) -> None:
-        """Keep the user on the walkable corridor (Faz 2 balanced UX).
+    def _emit_path_keeping(self, result, frame, now: float, nav_active: bool,
+                           top_alert, zone) -> None:
+        """Keep the user on the walkable corridor + occasional obstacle awareness.
 
-        Periodic "Düz devam edin" when centred on the path, prompt "Hafif
-        sola/sağa, yolun ortasına" on real drift, and a caution when the
-        corridor narrows. Yields the voice to active turn-by-turn navigation.
+        Quietened (Faz 3): the corridor offset is EMA-smoothed with direction
+        hysteresis so guidance does not flicker, and "Düz devam edin" is rare.
+        When a NEW relevant side/front hazard appears it is announced once
+        ("Sağ tarafınızda araç var") and not repeated until it changes. Yields
+        the voice to active turn-by-turn navigation.
         """
         ai = self._config.ai
-        corridor = getattr(result, "corridor", None)
 
+        # ── 1) Event-driven obstacle awareness ─────────────────────────────
+        # A new side/front hazard is announced once. Re-arm memory: the SAME
+        # (class, zone) is held silent for ambient_rearm_sec even if it briefly
+        # drops out of detection and reappears (a car flickering behind a pole
+        # must not read as "new"). We intentionally do NOT clear state when the
+        # hazard is momentarily absent — that was the flicker bug.
+        if top_alert is not None and top_alert.class_id in self._HAZARD_NOUN:
+            amb_sig = (top_alert.class_id, zone)
+            last = self._ambient_last_at.get(amb_sig, -1e9)
+            if ((now - self._last_ambient_at) >= ai.ambient_min_gap_sec
+                    and (now - last) >= ai.ambient_rearm_sec):
+                self._ambient_last_at[amb_sig] = now
+                self._last_ambient_at = now
+                noun = self._HAZARD_NOUN.get(top_alert.class_id, "engel")
+                text = "%s %s var" % (self._SIDE_WORD.get(zone, "Önünüzde"), noun)
+                if not nav_active:
+                    self._voice.say_obstacle(text)
+                self._rec.log_perception(result, chosen=text)
+                return
+
+        # ── 2) Path-keeping guidance ────────────────────────────────────────
+        corridor = getattr(result, "corridor", None)
         if (corridor is None or not corridor.valid
                 or corridor.free_ratio < ai.path_min_free_ratio):
-            text, on_path = "Yürünebilir alan azalıyor, dikkatli ilerleyin", False
-        else:
-            off = corridor.offset
-            if abs(off) <= ai.centerline_drift_warn:
-                text, on_path = "Düz devam edin", True
-            elif off < 0:
-                text, on_path = "Hafif sola, yolun ortasına", False
+            if (now - self._last_narrow_at) >= ai.narrowing_cooldown_sec and not nav_active:
+                self._voice.say_obstacle("Yürünebilir alan azalıyor, dikkatli ilerleyin")
+                self._last_narrow_at = now
+                self._rec.log_perception(result, chosen="narrowing")
             else:
-                text, on_path = "Hafif sağa, yolun ortasına", False
+                self._rec.log_perception(result, chosen=None)
+            return
+
+        # EMA-smooth the offset (anti-flicker), then hysteresis on direction.
+        a = ai.offset_ema_alpha
+        self._offset_ema = (corridor.offset if self._offset_ema is None
+                            else a * corridor.offset + (1 - a) * self._offset_ema)
+        off = self._offset_ema
+        if off <= -ai.centerline_drift_warn:
+            want = "left"
+        elif off >= ai.centerline_drift_warn:
+            want = "right"
+        elif abs(off) <= ai.drift_clear_band:
+            want = "straight"
+        else:
+            want = self._drift_dir   # inside the hysteresis band → hold
+        if want != self._drift_dir:
+            self._drift_count += 1
+            if self._drift_count >= ai.drift_persist_frames:
+                self._drift_dir, self._drift_count = want, 0
+        else:
+            self._drift_count = 0
+
+        if self._drift_dir == "left":
+            text, on_path = "Hafif sola, yolun ortasına", False
+        elif self._drift_dir == "right":
+            text, on_path = "Hafif sağa, yolun ortasına", False
+        else:
+            text, on_path = "Düz devam edin", True
 
         interval = (ai.path_confirm_interval_sec if on_path
                     else ai.path_correct_interval_sec)
+        # "Düz devam" only on its (long) interval; a drift correction may also
+        # speak when the direction actually changes.
         changed = text != self._last_path_text
-        if not (changed or (now - self._last_path_speak_at) >= interval):
+        if not ((now - self._last_path_speak_at) >= interval or (changed and not on_path)):
             self._rec.log_perception(result, chosen=None)
             return
-
         self._last_path_speak_at = now
         self._last_path_text = text
-        # Active navigation owns the voice for direction — don't double-talk.
         if not nav_active:
             self._voice.say_obstacle(text)
             self._rec.log_perception(result, chosen=text)
         else:
             self._rec.log_perception(result, chosen=None)
+
+    def _emit_road_ahead(self, result, frame, now: float, nav_active: bool) -> None:
+        """Road straight ahead → a cautionary, event-driven notice (Faz 4).
+
+        Upgrades to a crossing caution when a walkable sidewalk is CONFIRMED
+        beyond the road over ``crossing_persist_frames``. By design this NEVER
+        tells the user it is safe to cross: at this range the far-sidewalk
+        evidence is exactly where the segmentation model is least reliable, so a
+        false positive must degrade to "be careful", not "you may go". Spoken on
+        a single event cadence (``ambient_min_gap_sec``) and — unlike side
+        ambient notices — voiced even during navigation, because a road in the
+        path is a safety hazard the route's turn-by-turn does not cover.
+        """
+        ai = self._config.ai
+        corridor = getattr(result, "corridor", None)
+        candidate = bool(corridor is not None and getattr(corridor, "crossing", False))
+        if candidate and ai.crossing_detection_enabled:
+            self._crossing_frames += 1
+        else:
+            self._crossing_frames = 0
+        confirmed = self._crossing_frames >= ai.crossing_persist_frames
+
+        if (now - self._last_road_at) < ai.ambient_min_gap_sec:
+            self._rec.log_perception(result, chosen=None)
+            return
+
+        if confirmed:
+            # Crossing confirmed → caution only, never an assurance to cross.
+            text = ("Önünüzde araç yolu, karşı tarafta kaldırım var, "
+                    "geçişte dikkatli olun")
+        else:
+            # No crossing confirmed → protective "do not enter". This is also the
+            # safe fallback when the strict crossing shields miss a real crossing:
+            # over-cautioning "girmeyin" beats waving the user into traffic.
+            text = "Dikkat, önünüzde araç yolu, girmeyin"
+        self._last_road_at = now
+        self._voice.say_obstacle(text)
+        self._rec.log_perception(result, chosen=text)
+        if frame is not None:
+            self._rec.maybe_save_overlay(frame, result.mask, "road", info={
+                "walkable": result.scene.walkable_ratio,
+            })
 
     # ── Situation helpers ────────────────────────────────────────
 
@@ -620,6 +742,13 @@ class PerceptionService(threading.Thread):
         self._prev_walkable = None
         self._prev_top_distance = None
         self._last_path_text = None
+        self._offset_ema = None
+        self._drift_dir = "straight"
+        self._drift_count = 0
+        self._ambient_last_at.clear()
+        self._last_ambient_at = -999.0
+        self._crossing_frames = 0
+        self._last_road_at = -999.0
 
     def _stabilize_zone(self, class_id: int, zone: str) -> str:
         """Hysteresis on the dominant zone: a new zone must persist two frames
@@ -664,9 +793,14 @@ class PerceptionService(threading.Thread):
         return band
 
     _LOC_WORD = {"left": "Solunuzda", "right": "Sağınızda", "center": "Önünüzde"}
+    # Sentence-leading form for ambient obstacle awareness (Faz 3).
+    _SIDE_WORD = {"left": "Sol tarafınızda", "right": "Sağ tarafınızda", "center": "Önünüzde"}
+    # Mid-sentence form for the directional imminent warning (Faz 3).
+    _SIDE_WORD_MID = {"left": "solunuzda", "right": "sağınızda", "center": "önünüzde"}
     _HAZARD_NOUN = {
         int(ClassID.VEHICLE): "araç",
         int(ClassID.COLLISION_OBSTACLE): "engel",
+        int(ClassID.FALL_HAZARD): "engel",
         int(ClassID.DYNAMIC_HAZARD): "hareketli nesne",
     }
 
@@ -683,7 +817,7 @@ class PerceptionService(threading.Thread):
         if cid == int(ClassID.VEHICLE_ROAD):
             return "Dikkat, araç yolu, girmeyin"
         if cid == int(ClassID.CROSSWALK):
-            return "Yaya geçidi, geçiş güvenli"
+            return "Yaya geçidi, dikkatli geçin"
         if cid == int(ClassID.FALL_HAZARD):
             return "Zemin tehlikesi, dikkatli ilerleyin"
 

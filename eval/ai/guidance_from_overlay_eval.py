@@ -46,7 +46,7 @@ CLASS_NAMES = {
 
 CLASS_ALERT_CONFIG = {
     WALKABLE_SURFACE:   {"priority": 0, "alert": None,                                              "cooldown": 0},
-    CROSSWALK:          {"priority": 1, "alert": "Yaya geçidi algılandı, geçiş güvenli",           "cooldown": 8.0},
+    CROSSWALK:          {"priority": 1, "alert": "Yaya geçidi, dikkatli geçin",                    "cooldown": 8.0},
     VEHICLE_ROAD:       {"priority": 4, "alert": "Dikkat, araç yolu, girmeyin",                     "cooldown": 5.0},
     COLLISION_OBSTACLE: {"priority": 3, "alert": "Önünüzde engel var, durun veya yön değiştirin",  "cooldown": 3.0},
     FALL_HAZARD:        {"priority": 3, "alert": "Zemin tehlikesi, yavaşlayın",                     "cooldown": 3.0},

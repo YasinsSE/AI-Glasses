@@ -70,7 +70,7 @@ CLASS_COLORS_BGR = {
 # Alert config per class — priority 0 = silent
 CLASS_ALERT_CONFIG= {
     ClassID.WALKABLE_SURFACE:   {"priority": 0, "alert": None,                                           "cooldown": 0},
-    ClassID.CROSSWALK:          {"priority": 1, "alert": "Yaya geçidi algılandı, geçiş güvenli",        "cooldown": 8.0},
+    ClassID.CROSSWALK:          {"priority": 1, "alert": "Yaya geçidi, dikkatli geçin",                 "cooldown": 8.0},
     ClassID.VEHICLE_ROAD:       {"priority": 4, "alert": "Dikkat, araç yolu, girmeyin",                  "cooldown": 5.0},
     ClassID.COLLISION_OBSTACLE: {"priority": 3, "alert": "Önünüzde engel var, durun veya yön değiştirin","cooldown": 3.0},
     ClassID.FALL_HAZARD:        {"priority": 3, "alert": "Zemin tehlikesi, yavaşlayın",                  "cooldown": 3.0},
@@ -194,6 +194,9 @@ class CorridorInfo:
     offset: float = 0.0        # −1 (open path is to the LEFT) .. +1 (to the RIGHT)
     free_ratio: float = 0.0    # walkable share of the near corridor
     road_ahead: float = 0.0    # vehicle_road share of the central FORWARD band
+    crossing: bool = False     # road straight ahead WITH a walkable sidewalk beyond
+                               # (an instantaneous candidate; the service confirms it
+                               # over crossing_persist_frames before speaking).
 
 
 @dataclass
@@ -769,6 +772,79 @@ CENTERLINE_BAND_FRAC   = 0.34
 # vehicle_road share of the central forward band above which we warn "araç yolu".
 ROAD_AHEAD_WARN        = 0.20
 
+# Near rows (bottom of the corridor = ground at the user's feet) weigh more when
+# computing the steering offset, so guidance follows the corridor immediately
+# ahead instead of being pulled toward a far lateral opening. Without this, a
+# wide sidewalk with open space on one side and a wall on the other drags the
+# walkable centroid sideways and the assistant keeps saying "hafif sola/sağa"
+# even when the user is walking perfectly straight (the "centroid fallacy").
+# Top corridor row weight; the bottom row is always weight 1.0 (linear ramp).
+CORRIDOR_FAR_ROW_WEIGHT = 0.35
+
+# ── Crossing detection (Faz 4) ───────────────────────────────────────────────
+# A road straight ahead with a walkable sidewalk *beyond* it (you are about to
+# reach a street crossing). This is INFORMATIONAL-ONLY and the wording is a
+# caution — never a "you may cross" assurance — because at this distance the
+# far sidewalk is exactly where the segmentation model is most likely to
+# hallucinate (a grey van roof / barrier / asphalt glare read as "walkable").
+# So beyond a vertical walkable→road→walkable pattern we demand the far walkable
+# region pass BOTH a density and a contiguous-width shield to reject noise, and
+# the service additionally requires it to persist several frames.
+CROSSING_TOP_IGNORE_FRAC = 0.30   # ignore the top 30% of the frame (sky / buildings)
+CROSSING_NEAR_WALK_FRAC  = 0.15   # bottom third must be your own sidewalk (walkable)
+CROSSING_ROAD_FRAC       = 0.35   # middle third must be genuinely road
+CROSSING_FAR_WALK_FRAC   = 0.12   # top third walkable density (anti-noise floor)
+CROSSING_FAR_COL_FRAC    = 0.20   # a far column counts as walkable above this density
+CROSSING_FAR_MIN_WIDTH   = 0.40   # far walkable must span a CONTIGUOUS run of this
+                                  # fraction of the strip width (physical-sidewalk shield)
+
+
+def _max_true_run(flags) -> int:
+    """Length of the longest run of consecutive True values in a 1-D bool array."""
+    best = run = 0
+    for v in flags:
+        run = run + 1 if v else 0
+        if run > best:
+            best = run
+    return best
+
+
+def _detect_crossing(mask: np.ndarray) -> bool:
+    """Instantaneous walkable→road→walkable check down the central strip (Faz 4).
+
+    Conservative by design (see CROSSING_* notes): returns True only when your
+    own sidewalk is underfoot, real road sits ahead, AND the far sidewalk passes
+    a density + contiguous-width shield. Never trusts a sparse far-pixel cluster.
+    """
+    h, w = mask.shape
+    cb_lo = int(w * (0.5 - CENTERLINE_BAND_FRAC / 2.0))
+    cb_hi = int(w * (0.5 + CENTERLINE_BAND_FRAC / 2.0))
+    top_cut = int(h * CROSSING_TOP_IGNORE_FRAC)
+    strip = mask[top_cut:, cb_lo:cb_hi]
+    sh, sw = strip.shape
+    if sh < 3 or sw < 1:
+        return False
+
+    t = sh // 3
+    far  = strip[:t, :]            # farthest band (across the road)
+    mid  = strip[t:2 * t, :]       # the road itself
+    near = strip[2 * t:, :]        # ground at the user's feet
+
+    walk = int(ClassID.WALKABLE_SURFACE)
+    road = int(ClassID.VEHICLE_ROAD)
+
+    if float((near == walk).mean()) < CROSSING_NEAR_WALK_FRAC:
+        return False
+    if float((mid == road).mean()) < CROSSING_ROAD_FRAC:
+        return False
+    if float((far == walk).mean()) < CROSSING_FAR_WALK_FRAC:
+        return False
+
+    # Contiguous-width shield: scattered far walkable pixels (model noise) must
+    # NOT pass. Require a connected horizontal band of real width.
+    col_walk = (far == walk).mean(axis=0) >= CROSSING_FAR_COL_FRAC
+    return _max_true_run(col_walk) >= CROSSING_FAR_MIN_WIDTH * sw
+
 
 def analyse_corridor(mask: np.ndarray) -> CorridorInfo:
     """Path-keeping geometry from the walkable mask (Faz 2).
@@ -790,12 +866,19 @@ def analyse_corridor(mask: np.ndarray) -> CorridorInfo:
         return CorridorInfo(valid=False)
 
     walkable = (corridor == int(ClassID.WALKABLE_SURFACE))
-    col_counts = walkable.sum(axis=0).astype(np.float64)   # walkable per column
+    # True coverage of the corridor (unweighted) — drives the "narrowing" warning.
+    free_ratio = float(walkable.sum()) / float(corridor.size)
+
+    # Near-row-weighted column counts for the steering offset: the bottom rows
+    # (ground at the user's feet) weigh most, so the offset follows the corridor
+    # immediately ahead rather than a far lateral opening (the centroid fallacy).
+    ch = corridor.shape[0]
+    row_w = np.linspace(CORRIDOR_FAR_ROW_WEIGHT, 1.0, ch).reshape(ch, 1)
+    col_counts = (walkable.astype(np.float64) * row_w).sum(axis=0)
     total = float(col_counts.sum())
     if total <= 0:
         return CorridorInfo(valid=False)
 
-    free_ratio = total / float(corridor.size)
     centroid = float((np.arange(cw) * col_counts).sum() / total)  # 0..cw-1
     offset = (centroid / (cw - 1)) * 2.0 - 1.0                     # → −1..+1
 
@@ -805,8 +888,10 @@ def analyse_corridor(mask: np.ndarray) -> CorridorInfo:
     road_ahead = (float((central == int(ClassID.VEHICLE_ROAD)).sum()) / central.size
                   if central.size else 0.0)
 
+    crossing = _detect_crossing(mask)
+
     return CorridorInfo(valid=True, offset=offset, free_ratio=free_ratio,
-                        road_ahead=road_ahead)
+                        road_ahead=road_ahead, crossing=crossing)
 
 
 def generate_path_guidance(mask: np.ndarray) -> Optional[str]:
