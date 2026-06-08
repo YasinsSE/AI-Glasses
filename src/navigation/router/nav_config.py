@@ -39,9 +39,10 @@ class NavConfig:
     waypoint_threshold_m: float = 15.0     # "On the node" tolerance — mark a waypoint reached.
     # "On the segment" tolerance — perpendicular distance to the route polyline
     # beyond which we are genuinely off-route. Deliberately WIDE: it must absorb
-    # OSM pedestrian-map drift + GPS noise on a long straight segment, where the
-    # old node-distance test produced 53 false off-routes in one field test.
-    off_route_corridor_m: float = 35.0
+    # OSM pedestrian-map drift + GPS noise + nearest-node snapping at the start
+    # of a route (keci_testv4 went off-route ~immediately at 35 m on a longer
+    # route). The destination-progress check is the real wrong-way signal.
+    off_route_corridor_m: float = 50.0
 
     # Navigation announcement cadence (consumed by NavigationService)
     approach_threshold_m: float = 45.0       # Pre-warn when distance to next turn < N.

@@ -49,7 +49,7 @@ class FakeVFH:
         )
 
 
-def _service(vfh=None):
+def _service(vfh=None, nav=None):
     cfg = SimpleNamespace(
         ai=AIConfig(),
         vfh=SimpleNamespace(announce_cooldown_sec=6.0, enabled=bool(vfh)),
@@ -57,7 +57,7 @@ def _service(vfh=None):
     voice = FakeVoice()
     svc = PerceptionService(
         cfg, voice, SimpleNamespace(), threading.Event(),
-        nav=None, vfh=vfh, recorder=None,
+        nav=nav, vfh=vfh, recorder=None,
     )
     return svc, voice
 
@@ -246,14 +246,38 @@ def test_narrow_passage_enter_and_clear():
     orig = ps.time.monotonic
     ps.time.monotonic = lambda: t[0]
     try:
-        svc._dispatch(_result_corridor(free_ratio=0.10))   # enter narrow
+        # The squeeze must persist narrow_persist_frames before it announces
+        # (anti-noise); a single low frame must NOT fire.
+        t[0] += 0.5
+        svc._dispatch(_result_corridor(free_ratio=0.10))
+        assert not any("daralıyor" in s for s in voice.said), voice.said
+        for _ in range(2):
+            t[0] += 0.5
+            svc._dispatch(_result_corridor(free_ratio=0.10))   # now confirmed narrow
         assert any("daralıyor" in s for s in voice.said), voice.said
-        t[0] += 0.5
-        svc._dispatch(_result_corridor(free_ratio=0.15))   # still narrow → silent
-        assert sum("daralıyor" in s for s in voice.said) == 1, voice.said
-        t[0] += 0.5
-        svc._dispatch(_result_corridor(free_ratio=0.55))   # opened up
+        assert not any("Alan açıldı" in s for s in voice.said), voice.said
+        # Opening up also has to persist before "Alan açıldı".
+        for _ in range(3):
+            t[0] += 0.5
+            svc._dispatch(_result_corridor(free_ratio=0.55))
         assert any("Alan açıldı" in s for s in voice.said), voice.said
+    finally:
+        ps.time.monotonic = orig
+
+
+def test_path_keeping_speaks_during_navigation():
+    """Camera guidance must be spoken even while navigation is active (Faz 6
+    regression fix: it used to be fully suppressed during nav, so a nav test
+    produced no centering/awareness guidance at all)."""
+    nav = SimpleNamespace(is_active=True, current_step=None)
+    svc, voice = _service(nav=nav)
+    import ai.perception_service as ps
+    t = [3000.0]
+    orig = ps.time.monotonic
+    ps.time.monotonic = lambda: t[0]
+    try:
+        svc._dispatch(_result_corridor(free_ratio=0.6))  # nav active, open path
+        assert voice.said, "guidance was suppressed during navigation"
     finally:
         ps.time.monotonic = orig
 

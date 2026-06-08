@@ -65,8 +65,9 @@ class AIConfig:
     # (same hazard class, same zone, same safety level). Prevents repeating
     # "Önünüzde araç var" every few seconds for a static parked car.
     min_obstacle_repeat_sec: float = 20.0
-    # "Yol açık" repeat interval while the scene stays safe.
-    safe_announce_interval_sec: float = 30.0
+    # "Yol açık" repeat interval while the scene stays safe (raised 30→45 to keep
+    # the reassurance from being too frequent now that more frames read SAFE).
+    safe_announce_interval_sec: float = 45.0
 
     # ── Closing-threat escalation (Faz 1) ────────────────────────────────────
     # A centre hazard that keeps the SAME signature (same class/zone, already
@@ -102,6 +103,7 @@ class AIConfig:
     # once ("Alan açıldı, yol temiz"). The gap between the two prevents chatter.
     narrow_enter_ratio: float = 0.22
     narrow_exit_ratio: float = 0.40
+    narrow_persist_frames: int = 3            # squeeze must hold this many frames (anti-noise)
     ambient_min_gap_sec: float = 15.0         # min gap before a NEW hazard awareness notice
     # Per-(class,zone) re-arm: once a side hazard is announced, the SAME hazard is
     # not re-announced for this long even if it briefly drops out of detection and

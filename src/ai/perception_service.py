@@ -131,6 +131,7 @@ class PerceptionService(threading.Thread):
         self._last_ambient_at: float = -999.0
         # Narrow-passage state (Faz 6): True while squeezing between obstacles.
         self._in_narrow: bool = False
+        self._narrow_count: int = 0   # consecutive frames past the enter/exit threshold
         # Crossing / road-ahead (Faz 4): consecutive crossing-candidate frames and
         # the last time we voiced a road/crossing caution.
         self._crossing_frames: int = 0
@@ -643,13 +644,14 @@ class PerceptionService(threading.Thread):
 
     def _emit_path_keeping(self, result, frame, now: float, nav_active: bool,
                            top_alert, zone) -> None:
-        """Keep the user on the walkable corridor + occasional obstacle awareness.
+        """Keep the user on the walkable corridor + obstacle awareness.
 
-        Quietened (Faz 3): the corridor offset is EMA-smoothed with direction
-        hysteresis so guidance does not flicker, and "Düz devam edin" is rare.
-        When a NEW relevant side/front hazard appears it is announced once
-        ("Sağ tarafınızda araç var") and not repeated until it changes. Yields
-        the voice to active turn-by-turn navigation.
+        Runs DURING navigation too (Faz 6 fix). The route's turn-by-turn gives
+        the strategic direction but NOT the user's head orientation, so they
+        still need the camera-relative "hafif sola/sağa, yolun ortasına"
+        centering, squeeze warnings, and side-hazard awareness. Conflicts with a
+        turn instruction are avoided by the post-nav silence window (obstacle
+        speech is briefly muted right after each turn).
         """
         ai = self._config.ai
 
@@ -668,33 +670,38 @@ class PerceptionService(threading.Thread):
                 self._last_ambient_at = now
                 noun = self._HAZARD_NOUN.get(top_alert.class_id, "engel")
                 text = "%s %s var" % (self._SIDE_WORD.get(zone, "Önünüzde"), noun)
-                if not nav_active:
-                    self._voice.say_obstacle(text)
+                self._voice.say_obstacle(text)
                 self._rec.log_perception(result, chosen=text)
                 return
 
-        # ── 2) Narrow-passage awareness (state machine, Faz 6) ──────────────
+        # ── 2) Narrow-passage awareness (hysteresis + persistence) ──────────
         # Squeezing between two obstacles: the corridor does not fully close but
-        # the walkable share drops. Warn ONCE on entering the narrow stretch and
-        # reassure ONCE when it opens back up — with hysteresis so a flickering
-        # ratio cannot chatter "daralıyor"/"açıldı".
+        # the walkable share drops. The segmentation mask is noisy, so on top of
+        # the enter/exit hysteresis we require the condition to PERSIST a few
+        # frames before flipping — otherwise it chattered "daralıyor"/"açıldı"
+        # ~60 times in one walk (keci_testv4).
         corridor = getattr(result, "corridor", None)
         free = corridor.free_ratio if (corridor is not None and corridor.valid) else 0.0
-        if not self._in_narrow and free < ai.narrow_enter_ratio:
-            self._in_narrow = True
-            if not nav_active:
+        if not self._in_narrow:
+            self._narrow_count = (self._narrow_count + 1
+                                  if free < ai.narrow_enter_ratio else 0)
+            if self._narrow_count >= ai.narrow_persist_frames:
+                self._in_narrow = True
+                self._narrow_count = 0
                 self._voice.say_obstacle("Yürünebilir alan daralıyor, dikkatli ilerleyin")
-            self._rec.log_perception(result, chosen="narrowing")
-            return
-        if self._in_narrow:
-            if free > ai.narrow_exit_ratio:
+                self._rec.log_perception(result, chosen="narrowing")
+                return
+            # not yet confirmed narrow → fall through to drift guidance
+        else:
+            self._narrow_count = (self._narrow_count + 1
+                                  if free > ai.narrow_exit_ratio else 0)
+            if self._narrow_count >= ai.narrow_persist_frames:
                 self._in_narrow = False
-                if not nav_active:
-                    self._voice.say_obstacle("Alan açıldı, yol temiz")
+                self._narrow_count = 0
+                self._voice.say_obstacle("Alan açıldı, yol temiz")
                 self._rec.log_perception(result, chosen="cleared")
             else:
-                # Still in the squeeze (already warned) — stay quiet, no drift cue.
-                self._rec.log_perception(result, chosen=None)
+                self._rec.log_perception(result, chosen=None)  # still squeezing
             return
 
         # ── 3) Path-keeping guidance ────────────────────────────────────────
@@ -736,11 +743,8 @@ class PerceptionService(threading.Thread):
             return
         self._last_path_speak_at = now
         self._last_path_text = text
-        if not nav_active:
-            self._voice.say_obstacle(text)
-            self._rec.log_perception(result, chosen=text)
-        else:
-            self._rec.log_perception(result, chosen=None)
+        self._voice.say_obstacle(text)
+        self._rec.log_perception(result, chosen=text)
 
     def _emit_road_ahead(self, result, frame, now: float, nav_active: bool) -> None:
         """Road straight ahead → a cautionary, event-driven notice (Faz 4).
@@ -808,6 +812,7 @@ class PerceptionService(threading.Thread):
         self._crossing_frames = 0
         self._last_road_at = -999.0
         self._in_narrow = False
+        self._narrow_count = 0
 
     def _stabilize_zone(self, class_id: int, zone: str) -> str:
         """Hysteresis on the dominant zone: a new zone must persist two frames
