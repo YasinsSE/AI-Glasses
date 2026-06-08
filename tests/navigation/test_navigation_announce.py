@@ -88,6 +88,17 @@ def test_turn_prewarn_fires_at_45m_and_arms_suppression():
     assert svc._last_turn_at != -999.0  # suppression armed
 
 
+def test_turn_now_announced_at_waypoint():
+    """Reaching the turn node speaks the second trigger 'Şimdi sağa dönün' (Faz 6)."""
+    svc, voice = _service()
+    turn = _ROUTE[1]  # action turn_right, text "sağa dönün"
+    svc._announce(
+        ProgressResult(RouteStatus.WAYPOINT_HIT, turn.text,
+                       distance_to_next=0.0, current_step=turn),
+        Coord(39.92, 32.86))
+    assert any(s == "Şimdi sağa dönün" for s in voice.nav), voice.nav
+
+
 def test_off_route_still_reports_progress_not_silence():
     """OFF_ROUTE no longer goes silent — it keeps reporting progress (the field
     test went silent for ~200 s during a false off-route)."""

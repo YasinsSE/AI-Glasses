@@ -116,8 +116,12 @@ class RouteTracker:
             target.location.lat, target.location.lon,
         )
 
-        # 1. Waypoint reached
+        # 1. Waypoint reached. We report the REACHED step (the action to execute
+        #    NOW, e.g. the turn at this node) rather than the next one, so the
+        #    service can say "Şimdi sağa dönün" at the node. The next step gets
+        #    its own approach pre-warning as the user walks toward it.
         if dist < self.config.waypoint_threshold_m:
+            reached = target
             self._step_index += 1
 
             if self._step_index >= len(self._route):
@@ -126,15 +130,14 @@ class RouteTracker:
                     status=RouteStatus.FINISHED,
                     message="You have reached your destination.",
                     distance_to_next=0.0,
-                    current_step=target,
+                    current_step=reached,
                 )
 
-            next_step = self._route[self._step_index]
             return ProgressResult(
                 status=RouteStatus.WAYPOINT_HIT,
-                message=next_step.text,
+                message=reached.text,
                 distance_to_next=0.0,
-                current_step=next_step,
+                current_step=reached,
             )
 
         # 2. Off-route check — measured against the route POLYLINE, not the

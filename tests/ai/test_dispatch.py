@@ -30,9 +30,12 @@ from ai.perception_service import PerceptionService
 class FakeVoice:
     def __init__(self):
         self.said = []
+        self.preempted = []
 
-    def say_obstacle(self, text, urgent=False):
+    def say_obstacle(self, text, urgent=False, preempt=False):
         self.said.append(text)
+        if preempt:
+            self.preempted.append(text)
 
 
 class FakeVFH:
@@ -75,6 +78,19 @@ def _result(class_id, zone, walkable, safety, blocks_path,
         inference_ms=100.0, total_ms=150.0, path_guidance=None,
         corridor=CorridorInfo(valid=True, offset=0.0, free_ratio=0.5,
                               crossing=crossing),
+    )
+
+
+def _result_corridor(free_ratio, safety=SAFETY_CAUTION):
+    """A no-hazard result with a given corridor free_ratio (for path-keeping)."""
+    scene = SceneAnalysis(
+        walkable_ratio=0.5, zones=[], is_safe=(safety == SAFETY_SAFE),
+        dominant_hazard=None, safety_level=safety,
+    )
+    return SimpleNamespace(
+        alerts=[], scene=scene, mask=None,
+        inference_ms=100.0, total_ms=150.0, path_guidance=None,
+        corridor=CorridorInfo(valid=True, offset=0.0, free_ratio=free_ratio),
     )
 
 
@@ -215,6 +231,51 @@ def test_corridor_intrusion_warns_with_guidance():
         assert any("yönelin" in s for s in voice.said), voice.said
         # Obstacle on the right → steer to the open left.
         assert any("sola" in s for s in voice.said), voice.said
+        # A collision course PREEMPTS the current audio (Faz 6).
+        assert any("yönelin" in s for s in voice.preempted), voice.preempted
+    finally:
+        ps.time.monotonic = orig
+
+
+def test_narrow_passage_enter_and_clear():
+    """Squeezing between obstacles warns once on entering and reassures once on
+    opening back up (Faz 6 narrow-passage state machine)."""
+    svc, voice = _service()
+    import ai.perception_service as ps
+    t = [3000.0]
+    orig = ps.time.monotonic
+    ps.time.monotonic = lambda: t[0]
+    try:
+        svc._dispatch(_result_corridor(free_ratio=0.10))   # enter narrow
+        assert any("daralıyor" in s for s in voice.said), voice.said
+        t[0] += 0.5
+        svc._dispatch(_result_corridor(free_ratio=0.15))   # still narrow → silent
+        assert sum("daralıyor" in s for s in voice.said) == 1, voice.said
+        t[0] += 0.5
+        svc._dispatch(_result_corridor(free_ratio=0.55))   # opened up
+        assert any("Alan açıldı" in s for s in voice.said), voice.said
+    finally:
+        ps.time.monotonic = orig
+
+
+def test_muted_suppresses_non_collision_but_collision_preempts():
+    """While a priority utterance plays (muted), only a collision speaks."""
+    svc, voice = _service()
+    import ai.perception_service as ps
+    t = [3000.0]
+    orig = ps.time.monotonic
+    ps.time.monotonic = lambda: t[0]
+    try:
+        # Muted + narrow passage (non-collision) → stays silent.
+        svc._dispatch(_result_corridor(free_ratio=0.10), muted=True)
+        assert voice.said == [], voice.said
+        # Muted + collision course → speaks AND preempts.
+        for d in (5.0, 4.0, 2.0):
+            t[0] += 0.5
+            svc._dispatch(_result(ClassID.VEHICLE, "right", 0.3, SAFETY_UNSAFE, False,
+                                  distance_m=d, pixel_ratio=0.12, corridor_overlap=0.5),
+                          muted=True)
+        assert voice.preempted, voice.preempted
     finally:
         ps.time.monotonic = orig
 

@@ -217,15 +217,18 @@ class NavigationService(threading.Thread):
         now = time.monotonic()
 
         if result.status == RouteStatus.WAYPOINT_HIT:
-            # The final "finish" step is the destination itself. Reaching the
-            # PREVIOUS node fires WAYPOINT_HIT whose next-step text is
-            # "Hedefinize ulaştınız" — announcing that here speaks "arrived" a
-            # full segment early and leaves nav ghost-progressing toward the real
-            # finish node. So the arrival message is owned solely by FINISHED.
+            # current_step is the REACHED step — the action to execute NOW. This
+            # is the SECOND trigger of the two-stage turn: the approach already
+            # said "X metre sonra sağa dönün"; at the node we say "Şimdi sağa
+            # dönün". Start/continue steps just speak their text; arrival is owned
+            # by FINISHED (never announced a segment early).
             if step is not None and step.action == "finish":
                 self._prewarned_step_id = None
                 return
-            self._speak_event(result.message)
+            if step is not None and step.action in ("turn_left", "turn_right"):
+                self._speak_event(f"Şimdi {step.text}")
+            elif step is not None:
+                self._speak_event(step.text)
             self._last_turn_at = now
             self._prewarned_step_id = None  # next step not yet pre-warned
             return

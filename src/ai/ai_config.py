@@ -89,7 +89,6 @@ class AIConfig:
     # ── Path-keeping (Faz 2) ─────────────────────────────────────────────────
     # When nothing blocks the centerline ahead, keep the user on the walkable
     # corridor instead of announcing every side car.
-    path_min_free_ratio: float = 0.10         # below this corridor free ratio → "narrowing"
     centerline_drift_warn: float = 0.40       # smoothed |offset| above this → "hafif sola/sağa"
     path_confirm_interval_sec: float = 25.0   # periodic "Düz devam edin" when centred (rare)
     path_correct_interval_sec: float = 8.0    # min gap between drift corrections
@@ -97,7 +96,12 @@ class AIConfig:
     offset_ema_alpha: float = 0.4             # EMA smoothing of the corridor offset (anti-flicker)
     drift_clear_band: float = 0.25            # |offset| below this → back to "straight" (hysteresis)
     drift_persist_frames: int = 2             # a new drift direction must persist this many frames
-    narrowing_cooldown_sec: float = 15.0      # min gap between "alan azalıyor" warnings
+    # Narrow-passage awareness (Faz 6) — state machine with hysteresis. When the
+    # near-corridor walkable share drops below ``narrow_enter_ratio`` we warn once
+    # ("daralıyor"); when it climbs back above ``narrow_exit_ratio`` we reassure
+    # once ("Alan açıldı, yol temiz"). The gap between the two prevents chatter.
+    narrow_enter_ratio: float = 0.22
+    narrow_exit_ratio: float = 0.40
     ambient_min_gap_sec: float = 15.0         # min gap before a NEW hazard awareness notice
     # Per-(class,zone) re-arm: once a side hazard is announced, the SAME hazard is
     # not re-announced for this long even if it briefly drops out of detection and

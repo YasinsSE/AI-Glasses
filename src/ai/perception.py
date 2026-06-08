@@ -602,17 +602,25 @@ def analyse_scene(
 def _compute_safety_level(zones: list, walkable_ratio: float) -> int:
     """Compute 3-level safety from per-class zone data.
 
-    SAFE    — no hazard blocking the walkable path.
-    CAUTION — hazard visible but off-path (e.g. parked car on road side).
-    UNSAFE  — hazard blocking or very close to path.
+    SAFE    — path clear, no hazard worth flagging.
+    CAUTION — a hazard is visible but the forward path is still passable
+              (parked/side car, road alongside, an obstacle off the corridor).
+    UNSAFE  — the forward path is genuinely BLOCKED.
 
-    Vehicles are handled with position-aware logic: a small car visible only
-    in the top part of the frame (far away, on the road) is SAFE. The same
-    car filling the bottom half and close to the sidewalk is UNSAFE.
+    UNSAFE is deliberately reserved for a blocked path: either there is almost no
+    walkable area at all, or a hazard sits in the near walking corridor AND there
+    is little room to route around it. Everything else that is merely "hazard
+    present" stays CAUTION. Without this, dense streets read ~92% UNSAFE (every
+    nearby car turned the whole timeline red), which is neither realistic nor
+    useful — the spoken warnings already handle the nuance, this only sets the
+    severity label that drives the viewer colour. A far/small vehicle high in the
+    frame is not even a caution.
     """
     if walkable_ratio < 0.03:
-        return SAFETY_UNSAFE
+        return SAFETY_UNSAFE  # no walkable area → blocked
 
+    # "Little room to route around" — mirrors generate_alerts' blocks_path.
+    path_blocked = walkable_ratio < BLOCK_WALKABLE_RATIO
     level = SAFETY_SAFE
 
     for zone in zones:
@@ -623,42 +631,28 @@ def _compute_safety_level(zones: list, walkable_ratio: float) -> int:
         if cfg["priority"] == 0 or ratio < MIN_ALERT_RATIO:
             continue
 
-        if cid == ClassID.VEHICLE:
-            bh = zone.bottom_half_ratio
-            # A vehicle is only UNSAFE if it is BOTH close/grounded AND actually
-            # on our path (in the corridor or near). A big car off to the side /
-            # across the street is CAUTION, not UNSAFE — this is what made 98% of
-            # frames read UNSAFE in dense traffic.
-            relevant = (
-                (zone.estimated_distance_m is not None
-                 and zone.estimated_distance_m < RELEVANCE_DISTANCE_M)
-                or zone.corridor_overlap >= CORRIDOR_INTRUSION_RATIO
-            )
-            if bh < VEHICLE_SAFE_BOTTOM_RATIO and ratio < VEHICLE_SAFE_FRAME_RATIO:
-                pass  # vehicle only in upper frame, small → safe
-            elif relevant and (bh >= VEHICLE_UNSAFE_BOTTOM_RATIO
-                               or ratio >= VEHICLE_UNSAFE_FRAME_RATIO):
-                level = max(level, SAFETY_UNSAFE)
-            else:
-                level = max(level, SAFETY_CAUTION)
+        # A far/small vehicle visible only in the upper frame is not a hazard.
+        if cid == ClassID.VEHICLE and (
+            zone.bottom_half_ratio < VEHICLE_SAFE_BOTTOM_RATIO
+            and ratio < VEHICLE_SAFE_FRAME_RATIO
+        ):
+            continue
 
-        elif cid == ClassID.VEHICLE_ROAD:
-            level = max(level, SAFETY_CAUTION)
+        # A walkable-gated obstacle that does NOT overlap the walkable surface is
+        # off to the side and does not threaten the next step → ignore entirely.
+        if cid in WALKABLE_GATED_CLASSES and not (
+            walkable_ratio < MIN_WALKABLE_RATIO_FOR_GATING
+            or zone.walkable_overlap >= MIN_WALKABLE_OVERLAP
+        ):
+            continue
 
-        elif cid in WALKABLE_GATED_CLASSES:
-            # Use same gate as alert generation
-            if (walkable_ratio < MIN_WALKABLE_RATIO_FOR_GATING
-                    or zone.walkable_overlap >= MIN_WALKABLE_OVERLAP):
-                level = max(level, SAFETY_UNSAFE)
-
-        elif cid == ClassID.DYNAMIC_HAZARD:
-            if zone.dominant_zone == "center" or ratio > VERY_CLOSE_RATIO:
-                level = max(level, SAFETY_UNSAFE)
-            else:
-                level = max(level, SAFETY_CAUTION)
-
-        elif cfg["priority"] >= 3:
+        # In the near corridor AND no room to pass → blocking the path = UNSAFE.
+        # Otherwise the hazard is present but passable = CAUTION.
+        in_corridor = zone.corridor_overlap >= CORRIDOR_INTRUSION_RATIO
+        if in_corridor and path_blocked:
             level = max(level, SAFETY_UNSAFE)
+        else:
+            level = max(level, SAFETY_CAUTION)
 
     return level
 

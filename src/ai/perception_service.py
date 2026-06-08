@@ -129,7 +129,8 @@ class PerceptionService(threading.Thread):
         # re-announced as "new"; _last_ambient_at is the global min-gap.
         self._ambient_last_at: dict = {}
         self._last_ambient_at: float = -999.0
-        self._last_narrow_at: float = -999.0
+        # Narrow-passage state (Faz 6): True while squeezing between obstacles.
+        self._in_narrow: bool = False
         # Crossing / road-ahead (Faz 4): consecutive crossing-candidate frames and
         # the last time we voiced a road/crossing caution.
         self._crossing_frames: int = 0
@@ -384,17 +385,13 @@ class PerceptionService(threading.Thread):
                     self._pipeline.reset_cooldowns()
                 self._prev_gray = None
 
-            # Active-utterance gate — wait on the event so we wake the instant
-            # the priority utterance ends, instead of polling at 5 Hz.
-            if self._voice.is_speaking_priority():
-                self._voice.wait_until_idle(0.5)
-                continue
-
-            # Post-nav silence: obstacle alerts would be dropped anyway, so
-            # skip inference entirely until the window passes.
-            if self._voice.in_post_nav_silence():
-                self._stop_event.wait(0.2)
-                continue
+            # SAFETY: keep perceiving while a priority utterance plays or during
+            # the post-nav silence window — but MUTED, so only an imminent
+            # collision (which preempts the audio) reaches the user. Previously
+            # the loop skipped inference entirely here, so a car approaching
+            # during a turn instruction was invisible until the sentence ended.
+            muted = (self._voice.is_speaking_priority()
+                     or self._voice.in_post_nav_silence())
 
             t0 = time.monotonic()
             frame = self._read_frame()
@@ -415,7 +412,7 @@ class PerceptionService(threading.Thread):
                 self._stop_event.wait(0.5)
                 continue
 
-            self._dispatch(result, frame)
+            self._dispatch(result, frame, muted=muted)
 
             # Heartbeat overlay — guarantees a visual timeline regardless of what
             # _dispatch decided to say. (_dispatch may save an event-tagged frame
@@ -457,7 +454,7 @@ class PerceptionService(threading.Thread):
 
     # ── Alert dispatch ───────────────────────────────────────────
 
-    def _dispatch(self, result, frame=None) -> None:
+    def _dispatch(self, result, frame=None, muted: bool = False) -> None:
         """Filter, track, and forward perception output to the voice policy.
 
         Speech is gated on a stable *situation signature* — (hazard class,
@@ -468,6 +465,11 @@ class PerceptionService(threading.Thread):
         A hazard that persists in the forward path escalates from a calm "var"
         notice to an actionable VFH dodge ("...hafif sağa yönelin"); one that
         drifts out of the path is dropped silently.
+
+        ``muted=True`` (a priority utterance is playing or the post-nav silence
+        window is open): situation state is still tracked and frames recorded,
+        but ONLY an imminent collision is allowed to speak — and it preempts the
+        playing audio. Everything else stays silent until the window passes.
         """
         nav_active = self._nav is not None and self._nav.is_active
         now = time.monotonic()
@@ -491,7 +493,7 @@ class PerceptionService(threading.Thread):
             )
             safe_msg = "Yol açık, devam edebilirsiniz."
             spoke = False
-            if just_became_safe or interval_expired:
+            if (just_became_safe or interval_expired) and not muted:
                 self._voice.say_obstacle(safe_msg)
                 self._last_safe_announce_at = now
                 spoke = True
@@ -551,6 +553,9 @@ class PerceptionService(threading.Thread):
         # hard-stop loop — and may upgrade to a crossing notice. Handle it on its
         # own event cadence and return.
         if cid == int(ClassID.VEHICLE_ROAD):
+            if muted:  # priority audio playing → only collisions may speak
+                self._rec.log_perception(result, chosen=None)
+                return
             self._emit_road_ahead(result, frame, now, nav_active)
             return
 
@@ -558,6 +563,9 @@ class PerceptionService(threading.Thread):
         # Nothing blocks the path AND nothing is imminently closing → keep the
         # user on the sidewalk + occasional obstacle awareness (Faz 2/3).
         if not (in_path or imminent_side):
+            if muted:
+                self._rec.log_perception(result, chosen=None)
+                return
             self._emit_path_keeping(result, frame, now, nav_active, top_alert, zone)
             return
 
@@ -590,6 +598,10 @@ class PerceptionService(threading.Thread):
                 message = "Dikkat, %s, durun" % noun
 
         urgent = closing or imminent_side
+        # A genuine collision course preempts whatever audio is playing (and
+        # bypasses the post-nav silence window). This is the ONLY thing allowed
+        # to speak while muted.
+        preempt = imminent_side or (in_path and closing)
 
         # ── Cadence: urgent overrides the repeat; else change/escalation/repeat ──
         sig_changed = sig != self._last_spoken_sig
@@ -603,9 +615,11 @@ class PerceptionService(threading.Thread):
         interval_ok = (now - self._last_obstacle_speak_at) >= min_interval
 
         spoke = False
-        if interval_ok and message:
-            # Closing / imminent threats are spoken faster + higher-pitched.
-            self._voice.say_obstacle(message, urgent=urgent)
+        # While muted, suppress everything EXCEPT a preempting collision.
+        if interval_ok and message and (preempt or not muted):
+            # Closing / imminent threats are spoken faster + higher-pitched, and
+            # a collision course cuts through the current utterance.
+            self._voice.say_obstacle(message, urgent=urgent, preempt=preempt)
             self._last_obstacle_speak_at = now
             self._last_spoken_sig = sig
             self._last_safety = safety_level
@@ -659,17 +673,31 @@ class PerceptionService(threading.Thread):
                 self._rec.log_perception(result, chosen=text)
                 return
 
-        # ── 2) Path-keeping guidance ────────────────────────────────────────
+        # ── 2) Narrow-passage awareness (state machine, Faz 6) ──────────────
+        # Squeezing between two obstacles: the corridor does not fully close but
+        # the walkable share drops. Warn ONCE on entering the narrow stretch and
+        # reassure ONCE when it opens back up — with hysteresis so a flickering
+        # ratio cannot chatter "daralıyor"/"açıldı".
         corridor = getattr(result, "corridor", None)
-        if (corridor is None or not corridor.valid
-                or corridor.free_ratio < ai.path_min_free_ratio):
-            if (now - self._last_narrow_at) >= ai.narrowing_cooldown_sec and not nav_active:
-                self._voice.say_obstacle("Yürünebilir alan azalıyor, dikkatli ilerleyin")
-                self._last_narrow_at = now
-                self._rec.log_perception(result, chosen="narrowing")
+        free = corridor.free_ratio if (corridor is not None and corridor.valid) else 0.0
+        if not self._in_narrow and free < ai.narrow_enter_ratio:
+            self._in_narrow = True
+            if not nav_active:
+                self._voice.say_obstacle("Yürünebilir alan daralıyor, dikkatli ilerleyin")
+            self._rec.log_perception(result, chosen="narrowing")
+            return
+        if self._in_narrow:
+            if free > ai.narrow_exit_ratio:
+                self._in_narrow = False
+                if not nav_active:
+                    self._voice.say_obstacle("Alan açıldı, yol temiz")
+                self._rec.log_perception(result, chosen="cleared")
             else:
+                # Still in the squeeze (already warned) — stay quiet, no drift cue.
                 self._rec.log_perception(result, chosen=None)
             return
+
+        # ── 3) Path-keeping guidance ────────────────────────────────────────
 
         # EMA-smooth the offset (anti-flicker), then hysteresis on direction.
         a = ai.offset_ema_alpha
@@ -779,6 +807,7 @@ class PerceptionService(threading.Thread):
         self._last_ambient_at = -999.0
         self._crossing_frames = 0
         self._last_road_at = -999.0
+        self._in_narrow = False
 
     def _stabilize_zone(self, class_id: int, zone: str) -> str:
         """Hysteresis on the dominant zone: a new zone must persist two frames

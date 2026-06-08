@@ -77,6 +77,10 @@ LAUNCH_CMD = [
     "--auto-standby",
     # Test destination - A PTT press re-routes here from the current spot.
     "--auto-nav-coord", "39.988679,32.863508",
+    # press now also saves frames to outputs/dataset_raw/. DELETE this single
+    # line once data collection is done — we won't be gathering training data
+    # again. (Add "--capture-masks" on its own line for Roboflow label-assist.)
+    "--capture-dataset",
 ]
 
 logger = logging.getLogger("ALAS.launcher")

@@ -73,6 +73,18 @@ def test_truly_off_line_is_off_route():
     assert res.status == RouteStatus.OFF_ROUTE, res.status
 
 
+def test_waypoint_hit_returns_reached_turn_step():
+    """WAYPOINT_HIT reports the REACHED step (the turn to execute now), so the
+    service can say 'Şimdi sağa dönün' (Faz 6)."""
+    tr = RouteTracker(NavConfig())
+    tr.load_route(_route())
+    tr.check_progress(A)                  # reach start node → advance to turn
+    res = tr.check_progress(B)            # reach the turn node
+    assert res.status == RouteStatus.WAYPOINT_HIT, res.status
+    assert res.current_step.action == "turn_right", res.current_step
+    assert res.current_step.text == "sağa dönün", res.current_step
+
+
 if __name__ == "__main__":
     test_cross_track_zero_on_the_line()
     test_cross_track_perpendicular_offset()
