@@ -30,6 +30,40 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return EARTH_RADIUS_M * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
+def cross_track_distance(
+    plat: float, plon: float,
+    alat: float, alon: float,
+    blat: float, blon: float,
+) -> float:
+    """Perpendicular distance (metres) from point P to the segment A→B.
+
+    Uses a local equirectangular projection (east/north metres), which is
+    accurate to well under a metre over street-scale segments. The point is
+    projected onto the segment and CLAMPED to its endpoints, so a position
+    far from both nodes but still on the line between them reports a small
+    distance — exactly what the route off-route check needs (a long straight
+    OSM segment must not read as "off route" in its middle).
+    """
+    lat0 = math.radians(alat)
+    cos0 = math.cos(lat0)
+
+    def _xy(lat, lon):
+        x = math.radians(lon - alon) * cos0 * EARTH_RADIUS_M  # east
+        y = math.radians(lat - alat) * EARTH_RADIUS_M         # north
+        return x, y
+
+    px, py = _xy(plat, plon)
+    bx, by = _xy(blat, blon)            # A is the origin (0, 0)
+
+    seg2 = bx * bx + by * by
+    if seg2 <= 1e-9:                    # degenerate segment → point distance
+        return math.hypot(px, py)
+    t = (px * bx + py * by) / seg2
+    t = max(0.0, min(1.0, t))          # clamp onto the segment
+    cx, cy = t * bx, t * by
+    return math.hypot(px - cx, py - cy)
+
+
 def calculate_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
     Forward azimuth (bearing) from point 1 to point 2 in degrees [0, 360).

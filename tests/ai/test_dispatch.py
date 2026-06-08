@@ -60,11 +60,11 @@ def _service(vfh=None):
 
 
 def _result(class_id, zone, walkable, safety, blocks_path,
-            distance_m=4.0, pixel_ratio=0.1, crossing=False):
+            distance_m=4.0, pixel_ratio=0.1, crossing=False, corridor_overlap=0.0):
     alert = Alert(
         class_id=int(class_id), text="x", priority=5,
         zone=zone, distance_m=distance_m, pixel_ratio=pixel_ratio,
-        blocks_path=blocks_path,
+        blocks_path=blocks_path, corridor_overlap=corridor_overlap,
     )
     scene = SceneAnalysis(
         walkable_ratio=walkable, zones=[], is_safe=(safety == SAFETY_SAFE),
@@ -175,24 +175,46 @@ def test_ambient_side_obstacle_announced_once():
         ps.time.monotonic = orig
 
 
-def test_imminent_side_obstacle_warns():
-    """Walking into a very-close SIDE car must warn even off the centerline (Faz 3)."""
+def test_parked_side_car_no_imminent_spam():
+    """A parked car we walk PAST (beside the corridor) must NOT fire imminent (Faz 5).
+
+    The car is close and the distance shrinks frame-to-frame, but its corridor
+    overlap is ~0 (it is off to the side), so it is not a collision course. This
+    is the keci-test regression: "araç çok yakın" on every parked car.
+    """
     svc, voice = _service()
     import ai.perception_service as ps
     t = [3000.0]
     orig = ps.time.monotonic
     ps.time.monotonic = lambda: t[0]
     try:
-        # Frame 1: side car at a distance (sets the previous distance baseline).
-        svc._dispatch(_result(ClassID.VEHICLE, "right", 0.3, SAFETY_UNSAFE, False,
-                              distance_m=4.0, pixel_ratio=0.08))
-        voice.said.clear()
-        # Frame 2: now very close AND closing (4 m -> 2 m) — must warn.
-        t[0] += 0.5
-        svc._dispatch(_result(ClassID.VEHICLE, "right", 0.3, SAFETY_UNSAFE, False,
-                              distance_m=2.0, pixel_ratio=0.12))
-        assert any("çok yakın" in s for s in voice.said), voice.said
-        assert any("sağ" in s.lower() for s in voice.said), voice.said
+        for d in (5.0, 4.0, 2.0):  # closing fast, but off to the side
+            t[0] += 0.5
+            svc._dispatch(_result(ClassID.VEHICLE, "right", 0.3, SAFETY_UNSAFE, False,
+                                  distance_m=d, pixel_ratio=0.12, corridor_overlap=0.0))
+        assert not any("yönelin" in s or "çok yakın" in s for s in voice.said), voice.said
+    finally:
+        ps.time.monotonic = orig
+
+
+def test_corridor_intrusion_warns_with_guidance():
+    """An obstacle that intrudes the corridor AND keeps closing warns WITH a
+    steer direction, not a bare alarm (Faz 5)."""
+    svc, voice = _service()
+    import ai.perception_service as ps
+    t = [3000.0]
+    orig = ps.time.monotonic
+    ps.time.monotonic = lambda: t[0]
+    try:
+        # Frame 1 baseline, then sustained closing (5→4→2 m) with high corridor
+        # overlap (the car is moving into the path ahead, on our right).
+        for d in (5.0, 4.0, 2.0):
+            t[0] += 0.5
+            svc._dispatch(_result(ClassID.VEHICLE, "right", 0.3, SAFETY_UNSAFE, False,
+                                  distance_m=d, pixel_ratio=0.12, corridor_overlap=0.5))
+        assert any("yönelin" in s for s in voice.said), voice.said
+        # Obstacle on the right → steer to the open left.
+        assert any("sola" in s for s in voice.said), voice.said
     finally:
         ps.time.monotonic = orig
 

@@ -30,7 +30,7 @@ logging.basicConfig(
 # ------------------------------------------------------------------
 config = NavConfig(
     waypoint_threshold_m=15.0,
-    off_route_threshold_m=40.0,
+    off_route_corridor_m=35.0,
     # log_dir defaults to src/navigation/router/ via NavConfig._ROUTER_DIR
 )
 

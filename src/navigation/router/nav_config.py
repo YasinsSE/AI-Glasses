@@ -36,15 +36,24 @@ class NavConfig:
     steps_time_penalty: float = 2.0        # multiplier for 'steps' road type
 
     # Progress tracking
-    waypoint_threshold_m: float = 15.0     # Distance to mark a waypoint as reached.
-    off_route_threshold_m: float = 60.0    # Extra metres beyond step distance -> off-route.
-                                           # Raised: brittle on poor pedestrian maps; the
-                                           # destination-progress check below is the real signal.
+    waypoint_threshold_m: float = 15.0     # "On the node" tolerance — mark a waypoint reached.
+    # "On the segment" tolerance — perpendicular distance to the route polyline
+    # beyond which we are genuinely off-route. Deliberately WIDE: it must absorb
+    # OSM pedestrian-map drift + GPS noise on a long straight segment, where the
+    # old node-distance test produced 53 false off-routes in one field test.
+    off_route_corridor_m: float = 35.0
 
     # Navigation announcement cadence (consumed by NavigationService)
-    approach_threshold_m: float = 30.0       # Pre-warn when distance to next step < N.
+    approach_threshold_m: float = 45.0       # Pre-warn when distance to next turn < N.
+                                             # Raised 30→45: at walking speed 30 m left
+                                             # almost no lead time once the obstacle-alert
+                                             # queue drained (turn announced too late).
     long_stretch_threshold_m: float = 100.0  # > N -> fall back to the periodic reminder.
     progress_announce_interval: float = 25.0  # positive "on track" / distance reminder period.
+    # After a turn instruction is spoken, suppress the destination-distance ping
+    # ("hedefe X metre") for this long, so the user does not hear "26 m turn"
+    # immediately followed by "62 m to target" (confusing in the field test).
+    progress_suppress_after_turn_sec: float = 12.0
 
     # Destination-progress (Faz 2): "are we actually getting closer to the target?"
     progress_window_sec: float = 20.0      # sliding window over which to judge progress.

@@ -94,10 +94,14 @@ def main():
     monitor = ActivityMonitor(config, modes, voice, stop_event)
     monitor.set_nav(nav)
 
+    # Optional raw-frame capture for offline model fine-tuning (--capture-dataset).
+    from main.dataset_collector import build_collector
+    collector = build_collector(config)
+
     perception = (
         None if config.no_camera
         else PerceptionService(config, voice, modes, stop_event, nav=nav, vfh=vfh,
-                               recorder=recorder, monitor=monitor)
+                               recorder=recorder, monitor=monitor, collector=collector)
     )
     navigation = NavigationService(config, nav, gps, voice, modes, stop_event,
                                    recorder=recorder, monitor=monitor)

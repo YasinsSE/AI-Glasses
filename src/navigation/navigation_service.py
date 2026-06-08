@@ -66,6 +66,7 @@ class NavigationService(threading.Thread):
 
         self._last_spoken: str = ""
         self._last_progress_time: float = 0.0
+        self._last_turn_at: float = -999.0   # last turn instruction time (progress-ping guard)
         self._prewarned_step_id: Optional[int] = None
         self._stale_announced: bool = False
         # Destination-progress (Faz 2): are we actually getting closer to the
@@ -213,8 +214,19 @@ class NavigationService(threading.Thread):
             distance_to_next_m=getattr(result, "distance_to_next", None),
             step_text=(step.text if step is not None else None),
         )
+        now = time.monotonic()
+
         if result.status == RouteStatus.WAYPOINT_HIT:
+            # The final "finish" step is the destination itself. Reaching the
+            # PREVIOUS node fires WAYPOINT_HIT whose next-step text is
+            # "Hedefinize ulaştınız" — announcing that here speaks "arrived" a
+            # full segment early and leaves nav ghost-progressing toward the real
+            # finish node. So the arrival message is owned solely by FINISHED.
+            if step is not None and step.action == "finish":
+                self._prewarned_step_id = None
+                return
             self._speak_event(result.message)
+            self._last_turn_at = now
             self._prewarned_step_id = None  # next step not yet pre-warned
             return
 
@@ -223,26 +235,22 @@ class NavigationService(threading.Thread):
             return
 
         prog, dist_to_tgt = self._destination_progress(position)
-
-        if result.status == RouteStatus.OFF_ROUTE:
-            # Route-node off-route is brittle on poor pedestrian maps (it fired
-            # constantly while the user walked straight toward the target). Only
-            # warn when destination-progress confirms we are moving AWAY.
-            if prog == "wrong_way":
-                self._speak_event("Yanlış yöne gidiyorsunuz, hedef geride kaldı.")
-            return
-
-        if result.status != RouteStatus.PROGRESSING:
-            return
-
         dist = result.distance_to_next
-        step = result.current_step
-        if dist is None or step is None:
+
+        # Wrong-way is the only hard warning; it applies whether the tracker says
+        # OFF_ROUTE or PROGRESSING (the cross-track corridor makes a true
+        # off-route rare, so we never go silent — we keep judging real progress).
+        if prog == "wrong_way":
+            self._speak_event("Yanlış yöne gidiyorsunuz, hedef geride kaldı.")
             return
 
-        # (a) Approach pre-warning — fires once per step (turn instruction).
+        # (a) Approach pre-warning — once per step (turn instruction). Only while
+        #     PROGRESSING and never for the finish step (arrival = FINISHED).
         if (
-            dist <= self._config.nav.approach_threshold_m
+            result.status == RouteStatus.PROGRESSING
+            and dist is not None and step is not None
+            and step.action != "finish"
+            and dist <= self._config.nav.approach_threshold_m
             and self._prewarned_step_id != step.step_id
         ):
             if step.action == "start":
@@ -251,17 +259,28 @@ class NavigationService(threading.Thread):
                 self._voice.say_nav(f"{int(dist)} metre sonra {step.text}")
             self._prewarned_step_id = step.step_id
             self._last_spoken = step.text
+            self._last_turn_at = now
             return
 
-        # (b) Destination-progress — positive confirmation / wrong-way / ping.
-        now = time.monotonic()
-        if prog == "wrong_way":
-            self._speak_event("Yanlış yöne gidiyorsunuz, hedef geride kaldı.")
-        elif (now - self._last_progress_time) > self._config.nav.progress_announce_interval:
+        # (b) Destination-progress ping. Works in OFF_ROUTE too (safety net), but
+        #     is held back when a turn is imminent or was just announced, so the
+        #     user never hears the turn distance and the target distance
+        #     back-to-back ("26 m dönüş" then "62 m hedef" was confusing).
+        near_turn = (
+            dist is not None and step is not None and step.action != "finish"
+            and dist <= self._config.nav.approach_threshold_m
+        )
+        just_turned = (
+            (now - self._last_turn_at)
+            < self._config.nav.progress_suppress_after_turn_sec
+        )
+        if near_turn or just_turned:
+            return
+        if (now - self._last_progress_time) > self._config.nav.progress_announce_interval:
             if prog == "on_track" and dist_to_tgt is not None:
                 self._voice.say_progress(f"Doğru yoldasınız, hedefe {int(dist_to_tgt)} metre.")
                 self._last_progress_time = now
-            elif dist >= self._config.nav.long_stretch_threshold_m:
+            elif dist is not None and dist >= self._config.nav.long_stretch_threshold_m:
                 self._voice.say_progress(f"Hedefe {int(dist)} metre.")
                 self._last_progress_time = now
 

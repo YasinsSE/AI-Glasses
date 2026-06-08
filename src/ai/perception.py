@@ -180,6 +180,9 @@ class Alert:
     distance_m: Optional[float] = None        # ground distance estimate, if any
     pixel_ratio: float = 0.0                  # fraction of frame occupied
     blocks_path: bool = False                 # in the forward path with no easy bypass
+    corridor_overlap: float = 0.0             # share of pixels inside the near walking
+                                              # corridor (0 = off to the side, high = in
+                                              # the user's path → real collision course)
 
 
 @dataclass
@@ -755,6 +758,7 @@ def generate_alerts(
             distance_m=zone.estimated_distance_m,
             pixel_ratio=zone.pixel_ratio,
             blocks_path=blocks_path,
+            corridor_overlap=zone.corridor_overlap,
         ))
 
     raw.sort(key=lambda a: a.priority, reverse=True)

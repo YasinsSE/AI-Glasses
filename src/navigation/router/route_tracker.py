@@ -5,7 +5,7 @@
 from typing import List, Optional
 
 from .models import Coord, RouteStep, RouteStatus, ProgressResult
-from .geo_utils import haversine_distance
+from .geo_utils import haversine_distance, cross_track_distance
 from .nav_config import NavConfig
 
 
@@ -64,6 +64,24 @@ class RouteTracker:
         """A copy of the currently loaded route's steps (empty if none)."""
         return list(self._route)
 
+    def _cross_track_to_route(self, position: Coord) -> Optional[float]:
+        """Min perpendicular distance (m) to the route segments around the
+        current step: the segment we are travelling along (prev→current) and the
+        next one (current→next). Returns None when there is no segment to test."""
+        idx = self._step_index
+        pairs = []
+        if idx > 0:
+            pairs.append((self._route[idx - 1].location, self._route[idx].location))
+        if idx + 1 < len(self._route):
+            pairs.append((self._route[idx].location, self._route[idx + 1].location))
+        best: Optional[float] = None
+        for a, b in pairs:
+            d = cross_track_distance(
+                position.lat, position.lon, a.lat, a.lon, b.lat, b.lon)
+            if best is None or d < best:
+                best = d
+        return best
+
     # ------------------------------------------------------------------
     # Core method — call on every GPS update
     # ------------------------------------------------------------------
@@ -119,15 +137,15 @@ class RouteTracker:
                 current_step=next_step,
             )
 
-        # 2. Off-route check
-        if dist > self.config.off_route_threshold_m and self._step_index > 0:
-            prev_step = self._route[self._step_index - 1]
-            dist_from_prev = haversine_distance(
-                position.lat, position.lon,
-                prev_step.location.lat, prev_step.location.lon,
-            )
-            if dist_from_prev > self.config.off_route_threshold_m:
-                return ProgressResult(
+        # 2. Off-route check — measured against the route POLYLINE, not the
+        #    distance to the endpoint nodes. The old node-distance test flagged
+        #    off-route in the MIDDLE of a long straight segment (far from both
+        #    nodes yet perfectly on the line); the perpendicular distance to the
+        #    nearest route segment absorbs that, leaving a wide corridor for OSM
+        #    drift + GPS noise.
+        xt = self._cross_track_to_route(position)
+        if xt is not None and xt > self.config.off_route_corridor_m:
+            return ProgressResult(
                 status=RouteStatus.OFF_ROUTE,
                 message="You are off the route. Recalculating may be needed.",
                 distance_to_next=dist,

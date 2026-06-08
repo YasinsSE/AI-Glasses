@@ -67,6 +67,7 @@ class PerceptionService(threading.Thread):
         vfh: Optional[VFHPlanner] = None,
         recorder=None,
         monitor=None,
+        collector=None,
     ) -> None:
         super().__init__(name="PerceptionService", daemon=True)
         self._config = config
@@ -79,6 +80,8 @@ class PerceptionService(threading.Thread):
         self._prev_gray = None    # last downscaled grayscale frame (visual motion).
         from main.session_recorder import NullRecorder
         self._rec = recorder or NullRecorder()  # field-test black-box recorder
+        from main.dataset_collector import NullCollector
+        self._collector = collector or NullCollector()  # raw-frame fine-tuning capture
 
         self._pipeline: Optional[PerceptionPipeline] = None
         self._cap = None  # cv2.VideoCapture, lazy import.
@@ -111,6 +114,9 @@ class PerceptionService(threading.Thread):
         # situation signature is unchanged.
         self._prev_walkable: Optional[float] = None
         self._prev_top_distance: Optional[float] = None
+        # Consecutive frames the closing signal has held (anti-noise gate before
+        # a side obstacle can fire an imminent alarm).
+        self._closing_frames: int = 0
         # Path-keeping (Faz 2): last guidance line + when it was spoken.
         self._last_path_speak_at: float = -999.0
         self._last_path_text: Optional[str] = None
@@ -322,6 +328,10 @@ class PerceptionService(threading.Thread):
             self._loop()
         finally:
             self._release_camera()
+            try:
+                self._collector.close()
+            except Exception:  # noqa: BLE001
+                pass
             logger.info("[Perception] Stopped.")
 
     # ── Main loop ────────────────────────────────────────────────
@@ -416,6 +426,10 @@ class PerceptionService(threading.Thread):
                 frame, result.mask, "scene",
                 info={"walkable": result.scene.walkable_ratio},
             )
+
+            # Raw-frame capture for offline fine-tuning (--capture-dataset). Saves
+            # the CLEAN frame (no overlay) + optional predicted mask, throttled.
+            self._collector.maybe_capture(frame, result.mask)
 
             # FPS health log — surfaces the case where inference itself is
             # already slower than the requested interval.
@@ -512,14 +526,24 @@ class PerceptionService(threading.Thread):
         self._prev_top_distance = dist
         closing = (walk_drop >= ai.walkable_drop_urgent
                    or dist_drop >= ai.closing_distance_urgent_m)
+        # The closing signal must PERSIST across frames before it can fire a side
+        # alarm: a single noisy distance jump (uncalibrated FOV / class flicker)
+        # must not be read as "rushing at me".
+        self._closing_frames = self._closing_frames + 1 if closing else 0
+        closing_sustained = self._closing_frames >= ai.closing_persist_frames
         is_close = (top_alert is not None and cid != int(ClassID.CROSSWALK)
                     and ((dist is not None and dist < ai.imminent_distance_m)
                          or top_alert.pixel_ratio > VERY_CLOSE_RATIO))
 
-        # Imminent SIDE override (Faz-2 safety gap fix): a close obstacle off the
-        # centerline only warns when we are actually CLOSING on it (walking into
-        # it) — NOT for parked cars we merely walk past at a constant distance.
-        imminent_side = (not in_path) and is_close and closing
+        # Imminent SIDE override — ONLY a genuine collision course. A side
+        # obstacle qualifies only when it actually intrudes the walking corridor
+        # (it is moving into the path ahead) AND we are sustainedly closing on
+        # it. A parked car we merely walk PAST sits beside the corridor
+        # (low corridor_overlap) → never imminent. This is what stopped the
+        # "araç çok yakın" spam on every parked car (keci field test).
+        in_corridor = (top_alert is not None
+                       and top_alert.corridor_overlap >= ai.imminent_corridor_min)
+        imminent_side = (not in_path) and is_close and closing_sustained and in_corridor
 
         # ── ROAD STRAIGHT AHEAD (Faz 4) ─────────────────────────────────────
         # vehicle_road only becomes the top alert when no vehicle is relevant
@@ -555,10 +579,15 @@ class PerceptionService(threading.Thread):
             if closing and message and not (escalate and vfh_text):
                 message = "Dikkat, çok yakın, durun"
         else:
-            # Imminent obstacle OFF the centerline → directional urgent warning.
+            # Imminent obstacle intruding the corridor → tell the user WHERE to
+            # go, not just that something is close (the field test wanted
+            # guidance, not a bare alarm). Steer toward the open side.
             noun = self._HAZARD_NOUN.get(cid, "engel")
-            message = "Dikkat, %s %s çok yakın" % (
-                self._SIDE_WORD_MID.get(zone, "önünüzde"), noun)
+            steer = self._steer_away(zone, getattr(result, "corridor", None))
+            if steer:
+                message = "Dikkat, %s, %s yönelin" % (noun, steer)
+            else:
+                message = "Dikkat, %s, durun" % noun
 
         urgent = closing or imminent_side
 
@@ -741,6 +770,7 @@ class PerceptionService(threading.Thread):
         self._last_obstacle_speak_at = 0.0
         self._prev_walkable = None
         self._prev_top_distance = None
+        self._closing_frames = 0
         self._last_path_text = None
         self._offset_ema = None
         self._drift_dir = "straight"
@@ -803,6 +833,25 @@ class PerceptionService(threading.Thread):
         int(ClassID.FALL_HAZARD): "engel",
         int(ClassID.DYNAMIC_HAZARD): "hareketli nesne",
     }
+
+    @staticmethod
+    def _steer_away(zone, corridor) -> Optional[str]:
+        """Pick the open side to steer toward, away from a corridor obstacle.
+
+        Prefer the opposite of the obstacle's side ("on my left → go right").
+        When the obstacle reads as centre, fall back to the corridor centroid
+        (where the open walkable area actually is). Returns "sola"/"sağa"/None.
+        """
+        if zone == "left":
+            return "sağa"
+        if zone == "right":
+            return "sola"
+        if corridor is not None and getattr(corridor, "valid", False):
+            if corridor.offset <= -0.2:
+                return "sola"
+            if corridor.offset >= 0.2:
+                return "sağa"
+        return None
 
     def _render_message(self, alert, zone, band, scene, vfh_text, escalate) -> str:
         """Compose a short, prioritised Turkish line from the structured alert.

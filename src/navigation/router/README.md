@@ -30,7 +30,7 @@ from navigator import NavigationSystem
 
 config = NavConfig(
     waypoint_threshold_m=15.0,
-    off_route_threshold_m=40.0,
+    off_route_corridor_m=35.0,
     log_dir="logs",
 )
 
@@ -88,7 +88,7 @@ All settings in one place. Pass this to `NavigationSystem`.
 |---|---|---|
 | `walking_speed_kmh` | `5.0` | Used for ETA and A* heuristic |
 | `waypoint_threshold_m` | `15.0` | Distance to mark a waypoint as reached |
-| `off_route_threshold_m` | `40.0` | Distance before off-route is triggered |
+| `off_route_corridor_m` | `35.0` | Perpendicular distance to the route polyline before off-route |
 | `log_dir` | `"."` | Directory for JSON log files |
 | `route_filename` | `"active_route.json"` | Saved route file name |
 

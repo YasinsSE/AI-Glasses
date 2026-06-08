@@ -82,6 +82,9 @@ class RecorderConfig:
     min_free_mb: int = 500               # Refuse to record below this free disk space.
     recent_events_max: int = 5000        # In-RAM window for the rolling checkpoint
                                          # preview; final summary reads events.jsonl.
+    # Dataset capture (--capture-dataset): raw-frame sink for offline fine-tuning.
+    capture_interval_s: float = 4.0      # Min gap between saved raw training frames.
+    capture_save_mask: bool = False      # Also dump the predicted mask (label-assist).
 
 
 @dataclass
@@ -115,6 +118,9 @@ class ALASConfig:
     record: bool = False               # --record: enable the black-box recorder.
     live: bool = False                 # --live: one-line stdout dashboard.
     record_dir: str = "outputs/field_tests"
+    # --capture-dataset: save raw frames for offline model fine-tuning.
+    capture_dataset: bool = False
+    capture_dataset_dir: str = "outputs/dataset_raw"
 
     # ── Boot / warmup ────────────────────────────────────────────
     warmup_timeout_sec: float = 60.0      # await_ready max wait before forcing ACTIVE.
@@ -152,6 +158,14 @@ class ALASConfig:
                             help="Enable the field-test black-box recorder")
         parser.add_argument("--live", action="store_true",
                             help="Print a one-line live status dashboard to stdout")
+        parser.add_argument("--capture-dataset", nargs="?", const="__default__",
+                            default=None, metavar="DIR",
+                            help="Save raw camera frames for offline model fine-tuning "
+                                 "(Roboflow labelling). Optional DIR overrides the default "
+                                 "outputs/dataset_raw")
+        parser.add_argument("--capture-masks", action="store_true",
+                            help="With --capture-dataset, also dump the predicted mask "
+                                 "as a Roboflow label-assist starting point")
         parser.add_argument("--auto-standby", action="store_true",
                             help="Enable automatic power-saving STANDBY on sustained inactivity")
         parser.add_argument("--auto-nav", metavar="CATEGORY", default=None,
@@ -184,6 +198,11 @@ class ALASConfig:
         config.bypass_gps_warmup = args.bypass_gps_warmup
         config.record = args.record
         config.live = args.live
+        if args.capture_dataset is not None:
+            config.capture_dataset = True
+            if args.capture_dataset != "__default__":
+                config.capture_dataset_dir = args.capture_dataset
+        config.rec.capture_save_mask = args.capture_masks
         config.idle.enabled = args.auto_standby
         config.auto_nav_category = (args.auto_nav or "").strip().lower()
         if args.auto_nav_coord:
@@ -198,5 +217,6 @@ class ALASConfig:
         config.osm_map_path = _resolve(config.osm_map_path)
         config.ai.model_path = _resolve_repo(config.ai.model_path)
         config.record_dir = _resolve_repo(config.record_dir)
+        config.capture_dataset_dir = _resolve_repo(config.capture_dataset_dir)
         # nav.log_dir defaults to src/navigation/router/ via NavConfig — no override needed.
         return config

@@ -78,6 +78,13 @@ class AIConfig:
     walkable_drop_urgent: float = 0.12      # walkable_ratio dropping ≥ this between
                                             # frames = rapidly closing
     closing_distance_urgent_m: float = 0.8  # distance shrinking ≥ this between frames
+    # A side obstacle is a real COLLISION COURSE (imminent) only when it both
+    # (a) intrudes the walking corridor by at least this share of its pixels —
+    # a parked car beside the path has near-zero overlap — and (b) keeps closing
+    # for ``closing_persist_frames`` consecutive frames. Together these stopped
+    # the "araç çok yakın" spam on every parked car (Faz 5, keci field test).
+    imminent_corridor_min: float = 0.20
+    closing_persist_frames: int = 2
 
     # ── Path-keeping (Faz 2) ─────────────────────────────────────────────────
     # When nothing blocks the centerline ahead, keep the user on the walkable
@@ -90,13 +97,13 @@ class AIConfig:
     offset_ema_alpha: float = 0.4             # EMA smoothing of the corridor offset (anti-flicker)
     drift_clear_band: float = 0.25            # |offset| below this → back to "straight" (hysteresis)
     drift_persist_frames: int = 2             # a new drift direction must persist this many frames
-    narrowing_cooldown_sec: float = 12.0      # min gap between "alan azalıyor" warnings
-    ambient_min_gap_sec: float = 12.0         # min gap before a NEW hazard awareness notice
+    narrowing_cooldown_sec: float = 15.0      # min gap between "alan azalıyor" warnings
+    ambient_min_gap_sec: float = 15.0         # min gap before a NEW hazard awareness notice
     # Per-(class,zone) re-arm: once a side hazard is announced, the SAME hazard is
     # not re-announced for this long even if it briefly drops out of detection and
     # reappears (a car flickering behind a pole must not read as "new"). Longer
     # than ambient_min_gap_sec on purpose.
-    ambient_rearm_sec: float = 30.0
+    ambient_rearm_sec: float = 40.0
 
     # ── Crossing detection (Faz 4) ───────────────────────────────────────────
     # Road straight ahead with a walkable sidewalk beyond → an informational,
