@@ -144,6 +144,10 @@ class GPSReader:
         # Latest ground speed (km/h) from the RMC sentence. Used by the
         # auto-STANDBY activity monitor as a near-free "are we moving?" signal.
         self._last_speed_kmh: float = 0.0
+        # Latest course over ground (degrees true) from RMC. Only meaningful
+        # while moving — cleared below ~1.5 km/h, where the NEO-7M's track
+        # angle is noise. Used for post-turn direction confirmation (B3).
+        self._last_course_deg: Optional[float] = None
 
         # Satellite UTC datetime from the NMEA RMC sentence, paired with the
         # monotonic instant it was captured. Used as a trustworthy absolute-time
@@ -239,6 +243,11 @@ class GPSReader:
         """Latest RMC ground speed in km/h (0.0 if none seen yet)."""
         with self._lock:
             return self._last_speed_kmh
+
+    def get_course_deg(self) -> Optional[float]:
+        """Latest course over ground (degrees true), or None when stationary."""
+        with self._lock:
+            return self._last_course_deg
 
     def get_health(self) -> GPSHealth:
         now = time.monotonic()
@@ -393,8 +402,16 @@ class GPSReader:
         except ValueError:
             speed = 0.0
 
+        # p[8] = track angle (degrees true). Garbage while standing still, so
+        # publish it only at walking speed.
+        try:
+            course = float(p[8]) if p[8] and speed >= 1.5 else None
+        except ValueError:
+            course = None
+
         with self._lock:
             self._last_speed_kmh = speed
+            self._last_course_deg = course
 
         with self._lock:
             current_sats = self._confirmed_meta["sats"]

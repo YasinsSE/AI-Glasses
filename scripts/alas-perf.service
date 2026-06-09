@@ -1,0 +1,16 @@
+# systemd unit: pin Jetson clocks + fan at boot, before ALAS starts.
+# Install:
+#   sudo cp scripts/alas-perf.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now alas-perf
+# NOTE: adjust the path below if the repo lives somewhere else on the Jetson.
+[Unit]
+Description=ALAS Jetson performance setup (nvpmodel/jetson_clocks/fan)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /home/alas/AI-Glasses/scripts/jetson_setup.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

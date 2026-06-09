@@ -138,6 +138,25 @@ class PerceptionService(threading.Thread):
         self._last_road_at: float = -999.0
         # Loop heartbeat for the stall watchdog (set each iteration).
         self._last_heartbeat: float = 0.0
+        # Thermal guard: True while the loop runs at thermal_min_fps because the
+        # SoC is hot. Checked every thermal_check_interval_sec from sysfs.
+        self._thermal_throttled: bool = False
+        self._last_thermal_check: float = 0.0
+        # Low-light state: warn once when the scene goes dark (model output is
+        # unreliable there), reassure once when light returns.
+        self._low_light: bool = False
+        self._low_light_count: int = 0
+        self._last_low_light_at: float = -999.0
+        # Adaptive-FPS calm counter: consecutive frames with a SAFE scene and a
+        # still camera (drops the loop to fps_idle once it persists).
+        self._calm_frames: int = 0
+        # Fast-path collision tripwire (B5) state.
+        self._fast_collision_frames: int = 0
+        self._last_fast_collision_at: float = -999.0
+        # Last captured BGR frame, for on-demand consumers (the "oku" OCR
+        # command). cv2.read() allocates a fresh array per frame, so handing
+        # out the reference is safe.
+        self.last_frame = None
         self.model_ready = threading.Event()
 
     # ── Camera helpers (private) ─────────────────────────────────
@@ -160,6 +179,8 @@ class PerceptionService(threading.Thread):
             f"nvvidconv flip-method={ai.csi_flip_method} ! "
             f"video/x-raw, width={ai.camera_width}, height={ai.camera_height}, "
             f"format=(string)BGRx ! "
+            f"videorate drop-only=true ! "
+            f"video/x-raw, framerate=(fraction){ai.csi_delivery_fps}/1 ! "
             f"videoconvert ! video/x-raw, format=(string)BGR ! "
             f"appsink drop=true max-buffers=1"
         )
@@ -299,6 +320,15 @@ class PerceptionService(threading.Thread):
     # ── Thread entry point ───────────────────────────────────────
 
     def run(self) -> None:
+        # Cap OpenCV's worker pool: resize/cvtColor on a 512x384 frame gains
+        # nothing from 4 threads, and Vosk + the ONNX intent classifier need
+        # the other Nano cores. Must run before the first cv2 operation.
+        try:
+            import cv2
+            cv2.setNumThreads(2)
+        except Exception:  # noqa: BLE001
+            pass
+
         # Model load is heavy; do it inside the thread so main() never blocks.
         try:
             self._pipeline = PerceptionPipeline(
@@ -338,8 +368,61 @@ class PerceptionService(threading.Thread):
 
     # ── Main loop ────────────────────────────────────────────────
 
+    def _check_thermal(self, now: float) -> None:
+        """Deliberate degrade instead of silent DVFS throttling.
+
+        The Waveshare carrier's cooling lets the SoC creep toward the throttle
+        point under sustained TensorRT load; once DVFS kicks in, inference time
+        silently doubles. We read the thermal zones every few seconds and, past
+        ``thermal_throttle_c``, drop the loop to ``thermal_min_fps`` ourselves —
+        keeping per-frame latency predictable — then recover with hysteresis.
+        """
+        ai = self._config.ai
+        if not ai.thermal_guard_enabled:
+            return
+        if (now - self._last_thermal_check) < ai.thermal_check_interval_sec:
+            return
+        self._last_thermal_check = now
+        from main.session_recorder import read_soc_temps
+        temps = read_soc_temps()
+        if not temps:
+            return  # not a Jetson (desktop/mock) — guard is a no-op
+        hottest = max(temps.values())
+        if not self._thermal_throttled and hottest >= ai.thermal_throttle_c:
+            self._thermal_throttled = True
+            logger.warning(
+                "[Perception] SoC %.1fC >= %.1fC — throttling to %.1f FPS.",
+                hottest, ai.thermal_throttle_c, ai.thermal_min_fps,
+            )
+        elif self._thermal_throttled and hottest <= ai.thermal_recover_c:
+            self._thermal_throttled = False
+            logger.info(
+                "[Perception] SoC cooled to %.1fC — restoring %.1f FPS.",
+                hottest, ai.perception_fps,
+            )
+
+    def _target_interval(self) -> float:
+        """Seconds per frame for the CURRENT conditions.
+
+        Priority order: thermal guard (never speed up while hot) > hazard
+        boost (UNSAFE scene or a closing threat) > idle drop (sustained
+        SAFE + still camera) > the configured base rate.
+        """
+        ai = self._config.ai
+        if self._thermal_throttled:
+            fps = ai.thermal_min_fps
+        elif not ai.adaptive_fps_enabled:
+            fps = ai.perception_fps
+        elif self._prev_safety_level == SAFETY_UNSAFE or self._closing_frames > 0:
+            fps = max(ai.fps_alert, ai.perception_fps)
+        elif self._calm_frames >= ai.idle_safe_persist_frames:
+            fps = min(ai.fps_idle, ai.perception_fps)
+        else:
+            fps = ai.perception_fps
+        return 1.0 / max(fps, 0.1)
+
     def _loop(self) -> None:
-        interval = 1.0 / self._config.ai.perception_fps
+        interval = self._target_interval()
         frames_done = 0
         window_start = time.monotonic()
         self._last_heartbeat = time.monotonic()
@@ -354,6 +437,8 @@ class PerceptionService(threading.Thread):
             beat = time.monotonic()
             gap = beat - self._last_heartbeat
             self._last_heartbeat = beat
+            self._check_thermal(beat)
+            interval = self._target_interval()
             if gap > self._config.ai.stall_warn_sec:
                 logger.warning("[Perception] loop stalled %.1fs — resetting situation state.", gap)
                 self._reset_situation()
@@ -399,12 +484,21 @@ class PerceptionService(threading.Thread):
             if frame is None:
                 self._stop_event.wait(0.2)
                 continue
+            self.last_frame = frame
 
-            # Feed the auto-STANDBY monitor with a visual-stillness sample.
-            if self._monitor is not None:
-                metric = self._visual_motion_metric(frame)
-                if metric is not None:
-                    self._monitor.report_visual(metric)
+            # Visual-stillness sample: feeds the auto-STANDBY monitor AND the
+            # adaptive-FPS calm counter (SAFE scene + still camera → fps_idle).
+            metric = self._visual_motion_metric(frame)
+            if self._monitor is not None and metric is not None:
+                self._monitor.report_visual(metric)
+            calm = (self._prev_safety_level == SAFETY_SAFE
+                    and metric is not None
+                    and metric < self._config.ai.idle_motion_threshold)
+            self._calm_frames = self._calm_frames + 1 if calm else 0
+
+            # Low-light honesty check: warn (once) when the scene is too dark
+            # for the model to be trusted.
+            self._check_low_light(frame, t0, muted=muted)
 
             try:
                 result = self._pipeline.process(frame)
@@ -453,6 +547,40 @@ class PerceptionService(threading.Thread):
             if sleep_time > 0:
                 self._stop_event.wait(timeout=sleep_time)
 
+    def _check_low_light(self, frame, now: float, muted: bool = False) -> None:
+        """Warn once when the scene is too dark for the model to be trusted.
+
+        The model fails SILENTLY in the dark — masks still look plausible — so
+        the honest move is to tell the user vision is degraded and let them
+        weight the cane over the glasses. Mean brightness of a sparse pixel
+        sample; persistence + hysteresis keep a shadow or underpass from
+        flapping the message.
+        """
+        ai = self._config.ai
+        try:
+            brightness = float(frame[::16, ::16].mean())
+        except Exception:  # noqa: BLE001
+            return
+        if not self._low_light:
+            self._low_light_count = (self._low_light_count + 1
+                                     if brightness < ai.low_light_enter else 0)
+            if self._low_light_count >= ai.low_light_persist_frames:
+                self._low_light = True
+                self._low_light_count = 0
+                if not muted and (now - self._last_low_light_at) >= ai.low_light_rearm_sec:
+                    self._last_low_light_at = now
+                    self._voice.say_obstacle(
+                        "Ortam karanlık, görüşüm sınırlı. Dikkatli ilerleyin."
+                    )
+        else:
+            self._low_light_count = (self._low_light_count + 1
+                                     if brightness > ai.low_light_exit else 0)
+            if self._low_light_count >= ai.low_light_persist_frames:
+                self._low_light = False
+                self._low_light_count = 0
+                if not muted:
+                    self._voice.say_obstacle("Görüş normale döndü.")
+
     # ── Alert dispatch ───────────────────────────────────────────
 
     def _dispatch(self, result, frame=None, muted: bool = False) -> None:
@@ -476,6 +604,17 @@ class PerceptionService(threading.Thread):
         now = time.monotonic()
         scene = result.scene
         safety_level = getattr(scene, "safety_level", SAFETY_UNSAFE)
+
+        # Fast-path tripwire FIRST: a near-centre region drowning in hazard
+        # pixels speaks a preempting stop regardless of what the cadence and
+        # signature logic below would decide. Independent by design — a bug in
+        # the gating chain must not be able to swallow a wall-in-the-face.
+        if self._fast_collision_check(result, now):
+            self._rec.log_perception(result, chosen="Durun, önünüz kapalı")
+            if frame is not None:
+                self._rec.maybe_save_overlay(frame, result.mask, "fast_collision",
+                                             info={"walkable": scene.walkable_ratio})
+            return
 
         # Top obstacle alert (respecting nav-only classes like CROSSWALK).
         top_alert: Optional[Alert] = None
@@ -628,6 +767,14 @@ class PerceptionService(threading.Thread):
             spoke = True
             if self._pipeline is not None:
                 self._pipeline.mark_alert_spoken(cid)
+        elif interval_ok and message and muted:
+            # Calibration signal (B6): a due warning was eaten by the mute
+            # window. The field-test summary counts these per reason — a high
+            # "muted_unsafe" count means post_nav_silence_sec is too long.
+            self._rec.log_speak(
+                "obstacle", message, False,
+                reason=("muted_unsafe" if safety_level == SAFETY_UNSAFE else "muted"),
+            )
 
         self._rec.log_perception(result, chosen=message if spoke else None)
         if spoke and frame is not None:
@@ -669,7 +816,7 @@ class PerceptionService(threading.Thread):
                 self._ambient_last_at[amb_sig] = now
                 self._last_ambient_at = now
                 noun = self._HAZARD_NOUN.get(top_alert.class_id, "engel")
-                text = "%s %s var" % (self._SIDE_WORD.get(zone, "Önünüzde"), noun)
+                text = "%s %s var" % (self._zone_word(zone), noun)
                 self._voice.say_obstacle(text)
                 self._rec.log_perception(result, chosen=text)
                 return
@@ -743,7 +890,12 @@ class PerceptionService(threading.Thread):
             return
         self._last_path_speak_at = now
         self._last_path_text = text
-        self._voice.say_obstacle(text)
+        # Drift corrections go out as panned earcons (speech fallback inside);
+        # the rare "Düz devam edin" confirmation stays spoken.
+        if on_path:
+            self._voice.say_obstacle(text)
+        else:
+            self._voice.say_drift(self._drift_dir, text)
         self._rec.log_perception(result, chosen=text)
 
     def _emit_road_ahead(self, result, frame, now: float, nav_active: bool) -> None:
@@ -771,10 +923,17 @@ class PerceptionService(threading.Thread):
             self._rec.log_perception(result, chosen=None)
             return
 
+        # B2 fusion: the route itself says we are about to cross here, so a
+        # flat "girmeyin" would contradict the turn-by-turn guidance. Still
+        # NEVER an assurance — only context plus "be careful".
+        expected = bool(getattr(self._nav, "crossing_expected", False))
         if confirmed:
             # Crossing confirmed → caution only, never an assurance to cross.
             text = ("Önünüzde araç yolu, karşı tarafta kaldırım var, "
                     "geçişte dikkatli olun")
+        elif expected:
+            text = ("Rotanız yoldan karşıya geçiyor, geçidi göremiyorum, "
+                    "çok dikkatli geçin")
         else:
             # No crossing confirmed → protective "do not enter". This is also the
             # safe fallback when the strict crossing shields miss a real crossing:
@@ -787,6 +946,38 @@ class PerceptionService(threading.Thread):
             self._rec.maybe_save_overlay(frame, result.mask, "road", info={
                 "walkable": result.scene.walkable_ratio,
             })
+
+    # Classes that count toward the fast-path tripwire (anything solid enough
+    # to walk into; road/crosswalk are surfaces, not collisions).
+    _FAST_HAZARD_IDS = (
+        int(ClassID.VEHICLE), int(ClassID.COLLISION_OBSTACLE),
+        int(ClassID.DYNAMIC_HAZARD), int(ClassID.FALL_HAZARD),
+    )
+
+    def _fast_collision_check(self, result, now: float) -> bool:
+        """Cheap, gating-independent stop tripwire. True when it spoke."""
+        ai = self._config.ai
+        mask = getattr(result, "mask", None)
+        if not ai.fast_collision_enabled or mask is None:
+            return False
+        import numpy as np
+        h, w = mask.shape
+        region = mask[int(h * 0.6):, int(w * 0.3):int(w * 0.7)]
+        if region.size == 0:
+            return False
+        ratio = float(np.isin(region, self._FAST_HAZARD_IDS).mean())
+        if ratio < ai.fast_collision_ratio:
+            self._fast_collision_frames = 0
+            return False
+        self._fast_collision_frames += 1
+        if self._fast_collision_frames < ai.fast_collision_persist_frames:
+            return False
+        if (now - self._last_fast_collision_at) < ai.urgent_interval_sec:
+            return False  # already screamed — let the normal flow continue
+        self._last_fast_collision_at = now
+        self._last_obstacle_speak_at = now
+        self._voice.say_obstacle("Durun, önünüz kapalı", urgent=True, preempt=True)
+        return True
 
     # ── Situation helpers ────────────────────────────────────────
 
@@ -861,6 +1052,15 @@ class PerceptionService(threading.Thread):
     _SIDE_WORD = {"left": "Sol tarafınızda", "right": "Sağ tarafınızda", "center": "Önünüzde"}
     # Mid-sentence form for the directional imminent warning (Faz 3).
     _SIDE_WORD_MID = {"left": "solunuzda", "right": "sağınızda", "center": "önünüzde"}
+    # Clock bearings for the 3 detection zones (blind-navigation convention).
+    _CLOCK_WORD = {"left": "Saat on yönünde", "right": "Saat iki yönünde",
+                   "center": "Tam önünüzde"}
+
+    def _zone_word(self, zone: str) -> str:
+        """Sentence-leading position word — clock bearing or side word."""
+        if self._config.ai.clock_direction_enabled:
+            return self._CLOCK_WORD.get(zone, "Tam önünüzde")
+        return self._SIDE_WORD.get(zone, "Önünüzde")
     _HAZARD_NOUN = {
         int(ClassID.VEHICLE): "araç",
         int(ClassID.COLLISION_OBSTACLE): "engel",
@@ -905,7 +1105,7 @@ class PerceptionService(threading.Thread):
             return "Zemin tehlikesi, dikkatli ilerleyin"
 
         noun = self._HAZARD_NOUN.get(cid, "engel")
-        loc = self._LOC_WORD.get(zone, "Önünüzde")
+        loc = self._zone_word(zone)
 
         # No way through at all.
         if alert.blocks_path and scene.walkable_ratio < 0.03:

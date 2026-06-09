@@ -108,6 +108,42 @@ class VoicePolicy:
         self._priority_speak(text)
         self._rec.log_speak("prompt", text, True)
 
+    def say_drift(self, direction: str, fallback_text: str) -> None:
+        """Path-keeping cue (C4): panned earcon when available, else speech.
+
+        ``direction`` is "left" | "right" | "straight". The repetitive
+        "hafif sola/sağa" corrections are the main source of verbal fatigue
+        in field tests; a 0.3 s stereo beep carries the same information.
+        Gated exactly like obstacle speech (post-nav silence window).
+        """
+        with self._lock:
+            if time.monotonic() < self._suppress_obstacles_until:
+                self._rec.log_speak("earcon", direction, False, reason="post_nav_silence")
+                return
+        wav = self._earcon_path(direction)
+        if wav is not None:
+            try:
+                import subprocess
+                subprocess.Popen(
+                    ["aplay", "-q", wav],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                self._rec.log_speak("earcon", direction, True)
+                return
+            except Exception:  # noqa: BLE001 — no aplay → speech fallback
+                logger.debug("[Voice] earcon playback failed", exc_info=True)
+        self.say_obstacle(fallback_text)
+
+    def _earcon_path(self, direction: str):
+        """Resolve drift_<direction>.wav, or None when earcons can't play."""
+        import os
+        if not getattr(self._cfg.voice, "earcons_enabled", False):
+            return None
+        base = getattr(self._cfg.voice, "earcon_dir", "") or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "earcons")
+        path = os.path.join(base, f"drift_{direction}.wav")
+        return path if os.path.isfile(path) else None
+
     def say_obstacle(self, text: str, urgent: bool = False, preempt: bool = False) -> None:
         """Non-blocking obstacle alert. Suppressed during the post-nav silence window.
 

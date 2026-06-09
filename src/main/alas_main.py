@@ -106,7 +106,8 @@ def main():
     navigation = NavigationService(config, nav, gps, voice, modes, stop_event,
                                    recorder=recorder, monitor=monitor)
     commands = VoiceCommandHandler(config, nav, gps, None, voice, modes, stop_event,
-                                   recorder=recorder, monitor=monitor)
+                                   recorder=recorder, monitor=monitor,
+                                   perception=perception)
 
     def _load_and_attach_stt():
         try:

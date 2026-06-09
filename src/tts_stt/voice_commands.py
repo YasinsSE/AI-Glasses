@@ -59,6 +59,17 @@ class VoiceCommandHandler:
     SHUTDOWN_WORDS = ["kapat", "durdur", "bitir", "kapa"]
     STOP_NAV_WORDS = ["rota", "navigasyon", "iptal"]
 
+    # Local queries — matched on keywords BEFORE the SLM intent classifier, so
+    # they work identically in --bypass-stt mode and cannot be misrouted.
+    WHERE_WORDS = ["neredeyim", "nerdeyim", "neredeyiz", "konumum"]
+    STATUS_WORDS = ["durum", "pil", "batarya"]
+    # Token → canonical bookmark name ("evi kaydet" / "eve git" → "ev").
+    # Token-matched (not substring) so "evet" never reads as "ev".
+    PLACE_ALIASES = {
+        "ev": "ev", "evi": "ev", "eve": "ev", "evim": "ev", "evimi": "ev",
+        "iş": "iş", "işi": "iş", "işe": "iş", "işyeri": "iş", "işyerine": "iş",
+    }
+
     def __init__(
         self,
         config,          # ALASConfig
@@ -70,6 +81,7 @@ class VoiceCommandHandler:
         stop_event,      # threading.Event
         recorder=None,   # SessionRecorder or None
         monitor=None,    # ActivityMonitor (auto-STANDBY) or None
+        perception=None, # PerceptionService or None (for the "oku" OCR command)
     ):
         self._config = config
         self._nav = nav
@@ -79,8 +91,11 @@ class VoiceCommandHandler:
         self._modes = modes
         self._stop = stop_event
         self._monitor = monitor
+        self._perception = perception
         from main.session_recorder import NullRecorder
         self._rec = recorder or NullRecorder()  # field-test black-box recorder
+        from navigation.saved_places import SavedPlaces
+        self._places = SavedPlaces(config.saved_places_path)
 
     def set_stt(self, stt):
         # Single-reference attribute write; safe without a lock in CPython.
@@ -140,6 +155,11 @@ class VoiceCommandHandler:
         if not text:
             self._voice.say_prompt("Anlayamadim, tekrar deneyin.")
             self._rec.log_command("", intent=None, action="not_recognized")
+            return
+
+        # -- Local queries first (keyword-matched, SLM-independent) ----------
+        if self._handle_local_query(text):
+            self._rec.log_command(text, intent="local_query", action="local_query")
             return
 
         # -- Classify intent ------------------------------------------------
@@ -296,6 +316,130 @@ class VoiceCommandHandler:
             return
 
         self._voice.say_prompt("Sistem komutu alindi.")
+
+    # -- Local queries (neredeyim / durum / kayıtlı yerler) -------------------
+
+    def _handle_local_query(self, text):
+        """Keyword-matched commands answered from local state. True if handled."""
+        t = text.lower()
+        tokens = t.replace(",", " ").split()
+        place = next(
+            (self.PLACE_ALIASES[w] for w in tokens if w in self.PLACE_ALIASES),
+            None,
+        )
+
+        if place and "kaydet" in t:
+            self._save_place(place)
+            return True
+        if place and any(w in tokens for w in ("git", "gidelim", "götür", "dön")):
+            self._goto_place(place)
+            return True
+        if any(w in t for w in self.WHERE_WORDS):
+            self._handle_where()
+            return True
+        if any(w in tokens for w in self.STATUS_WORDS):
+            self._handle_status()
+            return True
+        # Token match keeps "okul" (school POI) from triggering a read.
+        if "oku" in tokens or "tabela" in t or "yazıyor" in t or "yazı" in tokens:
+            self._handle_read()
+            return True
+        return False
+
+    def _handle_read(self):
+        """"Oku" — OCR the last camera frame and speak what it says (C3)."""
+        frame = getattr(self._perception, "last_frame", None)
+        if frame is None:
+            self._voice.say_prompt("Kamera görüntüsü yok, okuyamıyorum.")
+            return
+        self._voice.say_prompt("Okuyorum, lütfen sabit durun.")
+        from ai.ocr_reader import read_sign
+        text = read_sign(frame)
+        if text is None:
+            self._voice.say_prompt("Okuma özelliği bu cihazda kurulu değil.")
+        elif not text:
+            self._voice.say_prompt("Okunabilir bir yazı bulamadım.")
+        else:
+            self._voice.say_prompt("Şunu okudum: %s" % text[:200])
+
+    def _save_place(self, place):
+        """Bookmark the current GPS fix under ``place`` ("evi kaydet")."""
+        fix = self._gps.get_coord()
+        if fix is None:
+            self._voice.say_prompt("GPS sinyali yok, konum kaydedilemedi.")
+            return
+        lat, lon, _ = fix
+        try:
+            self._places.save(place, lat, lon)
+        except Exception:
+            logger.exception("[Voice] saved-place write failed")
+            self._voice.say_prompt("Konum kaydedilemedi.")
+            return
+        self._voice.say_prompt("%s konumu kaydedildi." % place.capitalize())
+
+    def _goto_place(self, place):
+        """Route to a previously saved bookmark ("eve git")."""
+        coord = self._places.get(place)
+        if coord is None:
+            self._voice.say_prompt(
+                "Kayıtlı %s konumu yok. Önce, %s konumunu kaydet, deyin."
+                % (place, place)
+            )
+            return
+        self._voice.say_prompt("%s konumuna rota hesaplanıyor." % place.capitalize())
+        self.route_to_coord(coord[0], coord[1])
+
+    def _handle_where(self):
+        """"Neredeyim?" — nearest named road from the offline OSM graph."""
+        fix = self._gps.get_coord()
+        if fix is None:
+            self._voice.say_prompt("GPS sinyali yok, konum belirlenemiyor.")
+            return
+        lat, lon, _ = fix
+        try:
+            road = self._nav.where_am_i(Coord(lat, lon))
+        except Exception:
+            logger.exception("[Voice] where_am_i failed")
+            road = None
+        if road:
+            text = "%s üzerindesiniz." % road
+        else:
+            text = "Konumunuz haritadaki yolların dışında görünüyor."
+        if self._nav.is_active:
+            route = self._nav.get_route()
+            if route:
+                from navigation.router.geo_utils import haversine_distance
+                dest = route[-1].location
+                d = haversine_distance(lat, lon, dest.lat, dest.lon)
+                text += " Hedefe %d metre kaldı." % int(d)
+        self._voice.say_prompt(text)
+
+    def _handle_status(self):
+        """Spoken health summary: GPS quality, SoC temperature, route state."""
+        parts = []
+        try:
+            h = self._gps.get_health()
+            sats = getattr(h, "satellites", None)
+            if self._gps.get_coord() is None:
+                parts.append("GPS sinyali yok")
+            elif sats is not None and sats < 5:
+                parts.append("GPS sinyali zayıf")
+            else:
+                parts.append("GPS iyi")
+        except Exception:  # noqa: BLE001
+            parts.append("GPS durumu okunamadı")
+        try:
+            from main.session_recorder import read_soc_temps
+            temps = read_soc_temps()
+            if temps:
+                hottest = max(temps.values())
+                parts.append(
+                    "sıcaklık yüksek" if hottest >= 70.0 else "sıcaklık normal"
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        parts.append("rota aktif" if self._nav.is_active else "aktif rota yok")
+        self._voice.say_prompt("Sistem durumu: %s." % ", ".join(parts))
 
     # -- Helpers ------------------------------------------------------------
 

@@ -56,6 +56,31 @@ class NavConfig:
     # immediately followed by "62 m to target" (confusing in the field test).
     progress_suppress_after_turn_sec: float = 12.0
 
+    # Post-turn direction confirmation (B3). After a turn instruction the
+    # service compares the user's actual heading (GPS course over ground, or
+    # the displacement bearing as fallback) against the route's expected
+    # bearing once they have walked ``turn_confirm_min_move_m``. Within the
+    # tolerance → a short confirmation; beyond the wrong threshold → an
+    # immediate warning instead of waiting ~50 m for off-route detection.
+    # Between the two = ambiguous GPS → stay silent.
+    turn_confirm_enabled: bool = True
+    turn_confirm_min_move_m: float = 8.0
+    turn_confirm_timeout_sec: float = 30.0
+    turn_confirm_tolerance_deg: float = 60.0
+    turn_wrong_threshold_deg: float = 110.0
+
+    # B2 fusion: flag a crossing expectation to perception when the active
+    # route enters a 'crossing' segment within this many metres.
+    crossing_expect_m: float = 25.0
+
+    # Step-based wording for SHORT distances. Blind-navigation convention:
+    # "yaklaşık 20 adım sonra" is far easier to act on than "14 metre sonra"
+    # at close range; past steps_phrase_max_m a step count stops being
+    # countable and metres read better.
+    steps_phrasing: bool = True
+    step_length_m: float = 0.7
+    steps_phrase_max_m: float = 25.0
+
     # Destination-progress (Faz 2): "are we actually getting closer to the target?"
     progress_window_sec: float = 20.0      # sliding window over which to judge progress.
     wrong_way_gain_m: float = 25.0         # moved this much FARTHER over the window -> wrong way.

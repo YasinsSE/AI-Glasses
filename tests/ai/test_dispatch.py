@@ -182,11 +182,12 @@ def test_ambient_side_obstacle_announced_once():
         # Side car: not blocking centerline, not imminent → ambient notice, once.
         svc._dispatch(_result(ClassID.VEHICLE, "right", 0.3, SAFETY_UNSAFE, False,
                               distance_m=5.0, pixel_ratio=0.05))
-        assert any("Sağ taraf" in s for s in voice.said), voice.said
+        # Default wording is the clock-bearing convention ("Saat iki yönünde").
+        assert any("Saat iki yönünde" in s for s in voice.said), voice.said
         t[0] += 3.0  # same hazard shortly after → must NOT repeat the notice
         svc._dispatch(_result(ClassID.VEHICLE, "right", 0.3, SAFETY_UNSAFE, False,
                               distance_m=5.0, pixel_ratio=0.05))
-        assert sum("Sağ taraf" in s for s in voice.said) == 1, voice.said
+        assert sum("Saat iki yönünde" in s for s in voice.said) == 1, voice.said
     finally:
         ps.time.monotonic = orig
 

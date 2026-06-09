@@ -56,6 +56,7 @@ def _build_steps(path, start_node: Node) -> List[RouteStep]:
         action="start",
         distance_meters=0,
         road_name=first_edge.name,
+        road_type=first_edge.road_type,
     ))
 
     curr_name = first_edge.name
@@ -96,6 +97,7 @@ def _build_steps(path, start_node: Node) -> List[RouteStep]:
                 action=action,
                 distance_meters=int(dist_accum),
                 road_name=next_edge.name if next_edge else None,
+                road_type=next_edge.road_type if next_edge else None,
             ))
 
             dist_accum = 0.0

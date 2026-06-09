@@ -163,3 +163,43 @@ Detected scene elements are mapped to functional risk groups that drive audio fe
 - Jetson Nano serial device may enumerate as `/dev/ttyAMA10` depending on OS configuration — verify before GPS initialization
 - IMX219 camera requires CUDA-capable CSI configuration on Jetson; use `nvgstcapture` or `gstreamer` pipelines for frame acquisition
 - Power budget must account for sustained Jetson Nano GPU load; thermal management (fan) is required for continuous outdoor operation
+
+---
+
+## Jetson Performance Setup
+
+The Waveshare Nano carrier cools worse than the NVIDIA devkit; without pinned
+clocks the SoC thermal-throttles under sustained TensorRT load and inference
+time silently doubles. Run once per boot (or install the systemd unit):
+
+```bash
+sudo bash scripts/jetson_setup.sh          # nvpmodel MAXN + jetson_clocks + fan + zram
+sudo systemctl set-default multi-user.target   # one-time: headless boot (~600 MB RAM back)
+bash scripts/build_trt_engine.sh check     # verify the engine is FP16-fast (~150-180 ms)
+```
+
+Two in-app guards complement this (see `src/ai/ai_config.py`):
+
+- **Thermal guard** — above `thermal_throttle_c` the perception loop degrades
+  deliberately to `thermal_min_fps` instead of letting DVFS halve the FPS silently.
+- **Adaptive FPS** — calm + still → 1 FPS, normal walking → 2 FPS, closing
+  hazard → `fps_alert`; the thermal guard always wins.
+
+Camera FOV/tilt must be calibrated once on the final rig for accurate distance
+words: `python3 eval/ai/calibrate_camera.py --height 1.65 --points "1.0:R1,3.0:R2,5.0:R3"`.
+
+## Voice Commands (local queries)
+
+Besides POI navigation ("en yakın eczane"), the PTT button understands:
+
+| Command | Action |
+|---|---|
+| "neredeyim" | Nearest named road from the offline OSM graph + remaining route distance |
+| "evi kaydet" / "eve git" | Bookmark the current GPS fix / route back to it (`outputs/saved_places.json`) |
+| "durum" | Spoken health summary: GPS quality, SoC temperature, route state |
+| "oku" / "tabela" | OCR the camera frame and read signs aloud (needs `tesseract-ocr-tur`) |
+
+Path-keeping corrections ("hafif sola/sağa") play as **panned stereo earcons**
+(left ear = step left) instead of repeated speech; regenerate the tones with
+`python3 scripts/generate_earcons.py`. Obstacle directions use the blind-navigation
+clock convention ("saat iki yönünde araç") and short distances are spoken in steps.

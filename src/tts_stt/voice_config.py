@@ -32,3 +32,12 @@ class VoiceConfig:
 
     # SLM intent classifier — minimum confidence to accept a predicted intent.
     slm_confidence_threshold: float = 0.60
+
+    # Earcons (C4): short stereo tones for the repetitive path-keeping cues
+    # ("hafif sola/sağa"). Spoken corrections every few seconds cause verbal
+    # fatigue — a panned beep carries the same information in 0.3 s and leaves
+    # speech for things that need words. Falls back to speech when the WAVs
+    # are missing or aplay is unavailable. Generate the WAVs once with:
+    #     python3 scripts/generate_earcons.py
+    earcons_enabled: bool = True
+    earcon_dir: str = ""   # "" = src/tts_stt/earcons/ (package default)

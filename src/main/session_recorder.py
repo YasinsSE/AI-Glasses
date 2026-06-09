@@ -736,6 +736,20 @@ def build_summary(events: list, title: str = "ALAS Field Test Report",
     if by_method:
         lines.append("- Spoken by type: "
                      + ", ".join(f"{m}={n}" for m, n in sorted(by_method.items(), key=lambda x: -x[1])))
+    # Repeat pressure: how often the SAME line was chosen by the dispatcher.
+    # High counts here mean a cadence (min_obstacle_repeat_sec etc.) is too
+    # short for real walks — the calibration signal for tuning B6.
+    chosen_counts: dict = {}
+    for e in perception:
+        c = e.get("chosen")
+        if c:
+            chosen_counts[c] = chosen_counts.get(c, 0) + 1
+    repeats = sorted(((t, n) for t, n in chosen_counts.items() if n >= 5),
+                     key=lambda x: -x[1])[:5]
+    if repeats:
+        lines.append("- Most repeated announcements:")
+        for text, n in repeats:
+            lines.append(f"    - ×{n}: {text}")
     lines.append("")
 
     # Navigation

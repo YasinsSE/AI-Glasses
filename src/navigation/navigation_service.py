@@ -28,7 +28,7 @@ import threading
 import time
 from typing import Optional
 
-from navigation.router.geo_utils import haversine_distance
+from navigation.router.geo_utils import calculate_bearing, haversine_distance
 
 from main.config import ALASConfig
 from main.lifecycle import ModeManager, SystemMode
@@ -73,6 +73,9 @@ class NavigationService(threading.Thread):
         # final target? Robust to a mis-snapped OSM route geometry.
         self._dest = None
         self._dist_window: "collections.deque" = collections.deque()
+        # Post-turn confirmation (B3): armed at each turn instruction with the
+        # expected bearing; judged once the user has walked a few metres.
+        self._turn_check: Optional[dict] = None
 
     # ── Thread entry point ───────────────────────────────────────
 
@@ -207,7 +210,25 @@ class NavigationService(threading.Thread):
             return "wrong_way", d
         return None, d
 
+    def _update_crossing_expected(self, result: ProgressResult) -> None:
+        """B2 fusion: tell perception when the route is about to cross a road.
+
+        ``crossing_expected`` flips True while the upcoming step enters a
+        'crossing' OSM segment within ``crossing_expect_m`` — perception then
+        frames its road-ahead warning as crossing guidance instead of a flat
+        "girmeyin".
+        """
+        step = result.current_step
+        dist = result.distance_to_next
+        self._nav.crossing_expected = bool(
+            step is not None
+            and getattr(step, "road_type", None) == "crossing"
+            and dist is not None
+            and dist <= self._config.nav.crossing_expect_m
+        )
+
     def _announce(self, result: ProgressResult, position) -> None:
+        self._update_crossing_expected(result)
         step = result.current_step
         self._rec.log_nav(
             result.status.value if hasattr(result.status, "value") else result.status,
@@ -227,6 +248,7 @@ class NavigationService(threading.Thread):
                 return
             if step is not None and step.action in ("turn_left", "turn_right"):
                 self._speak_event(f"Şimdi {step.text}")
+                self._arm_turn_check(step, position, now)
             elif step is not None:
                 self._speak_event(step.text)
             self._last_turn_at = now
@@ -236,6 +258,9 @@ class NavigationService(threading.Thread):
         if result.status == RouteStatus.FINISHED:
             self._speak_event("Hedefinize ulaştınız, iyi günler.")
             return
+
+        # Judge the armed post-turn check (one verdict, then disarmed).
+        self._maybe_confirm_turn(position, now)
 
         prog, dist_to_tgt = self._destination_progress(position)
         dist = result.distance_to_next
@@ -259,7 +284,7 @@ class NavigationService(threading.Thread):
             if step.action == "start":
                 self._voice.say_nav(step.text)
             else:
-                self._voice.say_nav(f"{int(dist)} metre sonra {step.text}")
+                self._voice.say_nav(f"{self._dist_phrase(dist)} sonra {step.text}")
             self._prewarned_step_id = step.step_id
             self._last_spoken = step.text
             self._last_turn_at = now
@@ -286,6 +311,71 @@ class NavigationService(threading.Thread):
             elif dist is not None and dist >= self._config.nav.long_stretch_threshold_m:
                 self._voice.say_progress(f"Hedefe {int(dist)} metre.")
                 self._last_progress_time = now
+
+    # ── Post-turn confirmation (B3) ──────────────────────────────
+
+    def _arm_turn_check(self, step, position, now: float) -> None:
+        """Remember the bearing the route expects right after this turn."""
+        if not self._config.nav.turn_confirm_enabled:
+            return
+        route = self._nav.get_route()
+        nxt = next((s for s in route if s.step_id == step.step_id + 1), None)
+        if nxt is None:
+            return
+        expected = calculate_bearing(
+            step.location.lat, step.location.lon,
+            nxt.location.lat, nxt.location.lon,
+        )
+        self._turn_check = {"expected": expected, "pos": position, "at": now}
+
+    def _maybe_confirm_turn(self, position, now: float) -> None:
+        """One verdict per turn: confirm, warn, or stay silent on ambiguity.
+
+        Missing a turn is the costliest navigation error for a blind user —
+        off-route detection only fires ~50 m later. Heading source is GPS
+        course over ground when the module reports one, else the bearing of
+        the user's own displacement since the turn (works on any GPS).
+        """
+        chk = self._turn_check
+        if chk is None:
+            return
+        nav = self._config.nav
+        if (now - chk["at"]) > nav.turn_confirm_timeout_sec:
+            self._turn_check = None
+            return
+        moved = haversine_distance(position.lat, position.lon,
+                                   chk["pos"].lat, chk["pos"].lon)
+        if moved < nav.turn_confirm_min_move_m:
+            return
+        course = None
+        get_course = getattr(self._gps, "get_course_deg", None)
+        if get_course is not None:
+            try:
+                course = get_course()
+            except Exception:  # noqa: BLE001
+                course = None
+        if course is None:
+            course = calculate_bearing(chk["pos"].lat, chk["pos"].lon,
+                                       position.lat, position.lon)
+        diff = abs((course - chk["expected"] + 180.0) % 360.0 - 180.0)
+        self._turn_check = None
+        if diff <= nav.turn_confirm_tolerance_deg:
+            self._voice.say_progress("Doğru yöne döndünüz.")
+        elif diff >= nav.turn_wrong_threshold_deg:
+            self._voice.say_nav("Yanlış yöne döndünüz, durun.")
+        # else: GPS too ambiguous to judge — silence beats a wrong accusation.
+
+    def _dist_phrase(self, dist_m: float) -> str:
+        """Render a short distance for speech: steps when countable, else metres.
+
+        Step counts are rounded to the nearest 5 — "23 adım" suggests a
+        precision the GPS does not have, "yaklaşık 25 adım" does not.
+        """
+        nav = self._config.nav
+        if nav.steps_phrasing and dist_m <= nav.steps_phrase_max_m:
+            steps = max(5, int(round(dist_m / nav.step_length_m / 5.0)) * 5)
+            return f"yaklaşık {steps} adım"
+        return f"{int(dist_m)} metre"
 
     def _speak_event(self, text: str) -> None:
         if not text or text == self._last_spoken:

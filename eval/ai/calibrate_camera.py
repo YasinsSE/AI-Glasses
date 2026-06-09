@@ -66,6 +66,32 @@ def solve_vfov_deg(height_m, tilt_deg, dist_m, row, img_h):
     return math.degrees(theta_pix / norm)
 
 
+def solve_joint(height_m, points, img_h):
+    """Solve (tilt_deg, vfov_deg) JOINTLY from ≥2 (dist_m, row) measurements.
+
+    With one marker the tilt guess leaks into the solved FOV; with two or more
+    markers both unknowns are observable. The projection is linear in them:
+        atan(height / dist_i) = tilt_rad + norm_i * vfov_rad
+    so this is a plain least-squares line fit (x = norm, y = theta_total).
+    """
+    if len(points) < 2:
+        raise ValueError("--points needs at least two DIST:ROW measurements.")
+    xs, ys = [], []
+    for dist_m, row in points:
+        xs.append((row + 0.5) / img_h - 0.5)
+        ys.append(math.atan(height_m / dist_m))
+    n = float(len(xs))
+    sx, sy = sum(xs), sum(ys)
+    sxx = sum(x * x for x in xs)
+    sxy = sum(x * y for x, y in zip(xs, ys))
+    denom = n * sxx - sx * sx
+    if abs(denom) < 1e-9:
+        raise ValueError("Markers project to the same image row — spread them out.")
+    vfov_rad = (n * sxy - sx * sy) / denom
+    tilt_rad = (sy - vfov_rad * sx) / n
+    return math.degrees(tilt_rad), math.degrees(vfov_rad)
+
+
 def solve_tilt_deg(height_m, vfov_deg, dist_m, row, img_h):
     """Downward tilt (deg) that projects pixel ``row`` to ground distance ``dist_m``."""
     norm = (row + 0.5) / img_h - 0.5
@@ -103,9 +129,34 @@ def main(argv=None):
     ap.add_argument("--dist", type=float, help="Measured ground distance to the marker (m).")
     ap.add_argument("--row", type=int, help="Pixel row where the marker meets the ground (0 = top).")
     ap.add_argument("--img-h", type=int, default=384, help="Image height in pixels (default 384).")
+    ap.add_argument("--points", default=None, metavar="DIST:ROW,DIST:ROW,...",
+                    help="Two or more measurements (e.g. '1.0:370,3.0:300,5.0:265'): "
+                         "solves tilt AND vfov jointly — preferred over --dist/--row.")
     args = ap.parse_args(argv)
 
-    if not args.check:
+    if args.points:
+        try:
+            points = [(float(d), int(r))
+                      for d, r in (p.split(":") for p in args.points.split(","))]
+            tilt, vfov = solve_joint(args.height, points, args.img_h)
+        except ValueError as exc:
+            ap.error(str(exc))
+        args.tilt, args.vfov = tilt, vfov
+        print(f"\n  Solved jointly from {len(points)} markers:")
+        print(f"    camera_tilt_deg = {tilt:.2f}")
+        print(f"    camera_vfov_deg = {vfov:.2f}")
+        print("  → set both in src/ai/ai_config.py")
+        geom = CameraGeometry(height_m=args.height, tilt_deg=tilt, vfov_deg=vfov)
+        worst = 0.0
+        for dist_m, row in points:
+            back = pixel_to_ground_distance(row, args.img_h, geom)
+            err = abs(back - dist_m) if back is not None else float("inf")
+            worst = max(worst, err)
+            print(f"  Verify: row {row:4d} → {back:6.2f} m "
+                  f"(measured {dist_m:.2f} m, error {err:.3f} m)")
+        if worst > 0.25:
+            print("  WARNING: residual > 25 cm — re-measure, or the ground is not flat.")
+    elif not args.check:
         if args.dist is None or args.row is None:
             ap.error("--dist and --row are required unless --check is given.")
         if not (0 <= args.row < args.img_h):

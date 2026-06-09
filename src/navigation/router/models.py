@@ -30,6 +30,10 @@ class RouteStep:
     action: str                  # "start" | "turn_right" | "turn_left" | "continue" | "finish"
     distance_meters: int
     road_name: Optional[str] = None
+    # OSM highway type of the segment ENTERED at this step ("crossing",
+    # "footway", …). Lets NavigationService tell perception that a road
+    # crossing is expected ahead (B2 fusion).
+    road_type: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -39,6 +43,7 @@ class RouteStep:
             "action": self.action,
             "distance_meters": self.distance_meters,
             "road_name": self.road_name,
+            "road_type": self.road_type,
         }
 
     @staticmethod
@@ -50,6 +55,7 @@ class RouteStep:
             action=d["action"],
             distance_meters=d["distance_meters"],
             road_name=d.get("road_name"),
+            road_type=d.get("road_type"),
         )
 
 

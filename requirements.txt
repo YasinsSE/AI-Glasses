@@ -17,6 +17,11 @@ pyserial>=3.4
 vosk>=0.3.31
 pyaudio>=0.2.11
 
+# -- On-demand sign reading ("oku" command, optional) --
+# Degrades gracefully when missing. Also needs the system binary:
+#   sudo apt install tesseract-ocr tesseract-ocr-tur
+pytesseract>=0.3.8
+
 # -- Intent classification (choose one) --
 # Option A: sklearn-based (works everywhere, lighter)
 scikit-learn>=0.20

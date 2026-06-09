@@ -36,6 +36,12 @@ class AIConfig:
     csi_capture_width: int = 1280
     csi_capture_height: int = 720
     csi_framerate: int = 30
+    # Frames per second actually DELIVERED to the CPU. The sensor still runs at
+    # csi_framerate (Argus needs a native mode), but videorate drops to this
+    # before the CPU-side videoconvert — at 30 fps that conversion burned a
+    # large share of a Nano core for frames the 2 FPS model never saw. Keep a
+    # margin above perception_fps so freshest-frame drop still works.
+    csi_delivery_fps: int = 5
     # 0=none, 2=180°. Flip if the glasses-mounted module is physically inverted.
     csi_flip_method: int = 0
     csi_sensor_mode: int = 4
@@ -54,6 +60,12 @@ class AIConfig:
     camera_height_m: float = 1.65   # Glasses-mounted camera height above ground.
     camera_tilt_deg: float = 5.0    # Positive = camera tilted downwards.
     camera_vfov_deg: float = 60.0   # Vertical field of view (CALIBRATE — see note above).
+
+    # Clock-direction wording ("saat iki yönünde araç") instead of side words
+    # ("sağınızda araç"). This is the established orientation convention among
+    # blind users — a clock bearing is actionable without knowing how far the
+    # speaker's "right" extends. Maps the 3 detection zones to 10/12/2 o'clock.
+    clock_direction_enabled: bool = True
 
     # Perception dispatcher cadences.
     obstacle_dedupe_ttl_sec: float = 12.0    # Re-allow the same situation after N s.
@@ -120,6 +132,16 @@ class AIConfig:
     crossing_detection_enabled: bool = True
     crossing_persist_frames: int = 3          # frames the candidate must persist before speaking
 
+    # ── Fast-path collision tripwire (B5) ─────────────────────────────────
+    # Independent of the situation-tracking/gating chain: when hazardous
+    # classes fill this share of the near-centre region (bottom 40%, centre
+    # 40% of width) for a couple of frames, speak a preempting "Durun" no
+    # matter what the cadence logic decided. A safety net that guarantees the
+    # gating layers can never swallow a wall-in-the-face case.
+    fast_collision_enabled: bool = True
+    fast_collision_ratio: float = 0.45
+    fast_collision_persist_frames: int = 2
+
     # ── Situation tracking / escalation ──────────────────────────────────
     # A hazard must persist in the forward path for this many consecutive
     # frames before the calm "var" notice escalates to an actionable VFH
@@ -134,6 +156,45 @@ class AIConfig:
     # centre zone AND the walkable ratio is below this — otherwise the user
     # can simply walk past it and no dodge instruction is needed.
     block_walkable_ratio: float = 0.12
+
+    # ── Adaptive perception FPS (context-aware) ───────────────────────────
+    # A fixed 2 FPS is wrong in both directions: wasted heat while standing
+    # still on a clear sidewalk, and slow reaction while a hazard is closing.
+    # The loop picks its rate from context — calm+still → fps_idle, hazard
+    # UNSAFE or closing → fps_alert, otherwise perception_fps. The thermal
+    # guard below always wins (no boost while hot).
+    adaptive_fps_enabled: bool = True
+    fps_idle: float = 1.0
+    fps_alert: float = 3.5
+    # Visual motion metric (mean frame-diff, 0..255) below this == standing
+    # still; the SAFE+still state must persist this many frames before the
+    # rate drops, so a pause at a kerb does not flap the FPS.
+    idle_motion_threshold: float = 1.5
+    idle_safe_persist_frames: int = 10
+
+    # ── Low-light reliability warning ─────────────────────────────────────
+    # The segmentation model was trained on daylight scenes; in the dark it
+    # fails SILENTLY (plausible-looking but wrong masks). Below
+    # ``low_light_enter`` mean brightness (0-255) we tell the user once that
+    # vision is degraded, so they fall back to the cane instead of trusting
+    # the glasses. Hysteresis + persistence keep shadows/underpasses from
+    # flapping the message.
+    low_light_enter: float = 35.0
+    low_light_exit: float = 55.0
+    low_light_persist_frames: int = 4
+    low_light_rearm_sec: float = 180.0
+
+    # ── Thermal guard (Waveshare Nano cooling is marginal) ───────────────
+    # The SoC throttles its clocks near ~97 C, but inference already slows
+    # well before that. Instead of letting DVFS silently halve the FPS, we
+    # degrade DELIBERATELY: above ``thermal_throttle_c`` the loop drops to
+    # ``thermal_min_fps`` (announced once), and recovers below
+    # ``thermal_recover_c``. The gap between the two is hysteresis.
+    thermal_guard_enabled: bool = True
+    thermal_check_interval_sec: float = 10.0
+    thermal_throttle_c: float = 70.0
+    thermal_recover_c: float = 62.0
+    thermal_min_fps: float = 1.0
 
     # ── Perception-loop stall watchdog (Jetson under memory pressure) ─────
     # If a single frame takes longer than this, treat the loop as having

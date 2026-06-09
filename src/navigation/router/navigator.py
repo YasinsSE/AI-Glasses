@@ -48,6 +48,11 @@ class NavigationSystem:
         self._logger     = NavLogger(self.config)
         self._poi_finder = POIFinder(osm_map_path)
 
+        # B2 fusion flag: True while the route is about to cross a road.
+        # Written by NavigationService (single writer), read by
+        # PerceptionService to put the road-ahead warning in crossing context.
+        self.crossing_expected: bool = False
+
     # ------------------------------------------------------------------
     # Navigation control
     # ------------------------------------------------------------------
@@ -82,6 +87,7 @@ class NavigationSystem:
     def stop_navigation(self) -> None:
         """Forcibly end the current navigation session."""
         self._tracker.stop()
+        self.crossing_expected = False
         logger.info("Navigation stopped by user.")
 
     # ------------------------------------------------------------------
@@ -144,6 +150,26 @@ class NavigationSystem:
     def list_poi_categories(self) -> List[str]:
         """Desteklenen POI kategori isimlerini döndürür."""
         return self._poi_finder.list_categories()
+
+    def where_am_i(self, position: Coord, max_dist_m: float = 150.0) -> Optional[str]:
+        """Name of the nearest named road, or None when off-map.
+
+        Linear scan over the routing graph — fine for an on-demand voice
+        command (a city-district .osm holds a few thousand routable nodes),
+        not meant for the per-second GPS loop.
+        """
+        from .geo_utils import haversine_distance
+        best_name: Optional[str] = None
+        best_d = max_dist_m
+        for node in self._db.nodes.values():
+            d = haversine_distance(position.lat, position.lon, node.lat, node.lon)
+            if d >= best_d:
+                continue
+            for edge in node.edges:
+                if edge.name and edge.name != "Unnamed road":
+                    best_name, best_d = edge.name, d
+                    break
+        return best_name
 
     # ------------------------------------------------------------------
     # GPS update — call this on every position fix

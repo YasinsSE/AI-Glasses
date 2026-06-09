@@ -99,6 +99,8 @@ class ALASConfig:
 
     # ── Cross-cutting paths ──────────────────────────────────────
     osm_map_path: str = "navigation/router/map.osm"
+    # Named GPS bookmarks for "evi kaydet" / "eve git" (see navigation/saved_places.py).
+    saved_places_path: str = "outputs/saved_places.json"
 
     # ── Mic-less navigation ──────────────────────────────────────
     # --auto-nav <category>: with no microphone, automatically route to the
@@ -215,6 +217,7 @@ class ALASConfig:
         # Anchor relative paths so the entry point can be invoked from any
         # working directory.
         config.osm_map_path = _resolve(config.osm_map_path)
+        config.saved_places_path = _resolve_repo(config.saved_places_path)
         config.ai.model_path = _resolve_repo(config.ai.model_path)
         config.record_dir = _resolve_repo(config.record_dir)
         config.capture_dataset_dir = _resolve_repo(config.capture_dataset_dir)
