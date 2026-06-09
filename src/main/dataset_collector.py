@@ -49,7 +49,10 @@ class DatasetCollector:
 
     def __init__(self, out_dir, interval_s: float = 2.0, save_mask: bool = False) -> None:
         self.enabled = True
-        self._dir = Path(out_dir)
+        # Each capture run gets its OWN timestamped sub-directory, so pressing
+        # the button again (a new session) never overwrites the previous walk's
+        # frames — they accumulate as dataset_raw/<YYYYmmdd_HHMMSS>/images/.
+        self._dir = Path(out_dir) / time.strftime("%Y%m%d_%H%M%S")
         self._img_dir = self._dir / "images"
         self._img_dir.mkdir(parents=True, exist_ok=True)
         self._save_mask = save_mask

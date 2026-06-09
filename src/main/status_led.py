@@ -13,7 +13,7 @@ glance. It is driven by ``alas_main`` — the process that actually knows the
 
 **Single owner:** only this driver touches BCM 24, and on exit it cleans up
 ONLY that pin (never a global ``GPIO.cleanup()``), so the launcher's BCM 23 and
-the PTT button's BCM 18 are left untouched.
+the PTT button's BCM 25 are left untouched.
 
 **Active-LOW wiring (important).** Jetson GPIO pins idle HIGH when no process
 drives them, so in IDLE (alas_main not running) an active-HIGH LED would stay

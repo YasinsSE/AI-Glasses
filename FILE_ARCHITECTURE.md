@@ -55,7 +55,7 @@
 | [**src/tts_stt/button_listener.py**](./src/tts_stt/button_listener.py) | **GPIO / PIN config:** `Jetson.GPIO`, `setmode(BCM)`, `setup(pin, IN, pull_up_down=PUD_UP)`, active-low reading, and software debounce. **Concepts:** Pull-up resistors, active-low logic, contact bounce. |
 | [**src/navigation/sensors/sensor_config.py**](./src/navigation/sensors/sensor_config.py) | Where the serial port/baud and candidate ports live. |
 
-* **Bridge to STM32 Knowledge:** On Jetson you write `GPIO.setup(18, IN, PUD_UP)`; on STM32 the same concept is configuring `GPIOx->MODER`, `GPIOx->PUPDR`.
+* **Bridge to STM32 Knowledge:** On Jetson you write `GPIO.setup(25, IN, PUD_UP)`; on STM32 the same concept is configuring `GPIOx->MODER`, `GPIOx->PUPDR`.
 
 ---
 

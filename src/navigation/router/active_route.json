@@ -1,93 +1,115 @@
 {
-  "saved_at": "2026-06-06T16:02:33.971254",
-  "step_count": 8,
+  "saved_at": "2026-06-09T17:34:54.181865",
+  "step_count": 10,
   "steps": [
     {
       "step_id": 0,
-      "text": "Rota başlıyor. Şehit Gönenç Caddesi üzerindesiniz",
+      "text": "Rota başlıyor. Süleyman Bey Sokak üzerindesiniz",
       "location": {
-        "lat": 39.9242103,
-        "lon": 32.8454521
+        "lat": 39.9244955,
+        "lon": 32.8456618
       },
       "action": "start",
       "distance_meters": 0,
-      "road_name": "Şehit Gönenç Caddesi"
+      "road_name": "Süleyman Bey Sokak"
     },
     {
       "step_id": 1,
       "text": "sola dönün",
       "location": {
-        "lat": 39.9240102,
-        "lon": 32.8452347
+        "lat": 39.9249049,
+        "lon": 32.8452056
       },
       "action": "turn_left",
-      "distance_meters": 28,
-      "road_name": "Şehit Gönenç Caddesi"
+      "distance_meters": 59,
+      "road_name": "Unnamed road"
     },
     {
       "step_id": 2,
-      "text": "sert sağa dönün",
+      "text": "sağa dönün",
       "location": {
-        "lat": 39.9233159,
-        "lon": 32.8443144
+        "lat": 39.9251434,
+        "lon": 32.8436147
       },
       "action": "turn_right",
-      "distance_meters": 111,
+      "distance_meters": 181,
       "road_name": "Unnamed road"
     },
     {
       "step_id": 3,
-      "text": "sert sağa dönün",
+      "text": "düz devam edin",
       "location": {
-        "lat": 39.9233701,
-        "lon": 32.8442722
+        "lat": 39.9246946,
+        "lon": 32.8419856
       },
-      "action": "turn_right",
-      "distance_meters": 7,
-      "road_name": "Unnamed road"
+      "action": "continue",
+      "distance_meters": 147,
+      "road_name": "Akdeniz Caddesi"
     },
     {
       "step_id": 4,
-      "text": "sola dönün",
+      "text": "sert sağa dönün",
       "location": {
-        "lat": 39.9240467,
-        "lon": 32.8451522
+        "lat": 39.9222876,
+        "lon": 32.837737
       },
-      "action": "turn_left",
-      "distance_meters": 107,
-      "road_name": "Şehit Gönenç Caddesi"
+      "action": "turn_right",
+      "distance_meters": 463,
+      "road_name": "Unnamed road"
     },
     {
       "step_id": 5,
-      "text": "sert sola dönün",
+      "text": "düz devam edin",
       "location": {
-        "lat": 39.9244955,
-        "lon": 32.8456618
+        "lat": 39.9223793,
+        "lon": 32.8376759
       },
-      "action": "turn_left",
-      "distance_meters": 66,
-      "road_name": "Süleyman Bey Sokak"
+      "action": "continue",
+      "distance_meters": 11,
+      "road_name": "Dumlupınar Yolu"
     },
     {
       "step_id": 6,
       "text": "sert sağa dönün",
       "location": {
-        "lat": 39.9259057,
-        "lon": 32.8441186
+        "lat": 39.9240275,
+        "lon": 32.8366262
       },
       "action": "turn_right",
-      "distance_meters": 204,
-      "road_name": "Şehit Bahadir Demir Sokak"
+      "distance_meters": 205,
+      "road_name": "Unnamed road"
     },
     {
       "step_id": 7,
+      "text": "sert sola dönün",
+      "location": {
+        "lat": 39.9244713,
+        "lon": 32.8373642
+      },
+      "action": "turn_left",
+      "distance_meters": 79,
+      "road_name": "Unnamed road"
+    },
+    {
+      "step_id": 8,
+      "text": "sert sola dönün",
+      "location": {
+        "lat": 39.9245629,
+        "lon": 32.8372713
+      },
+      "action": "turn_left",
+      "distance_meters": 12,
+      "road_name": "Unnamed road"
+    },
+    {
+      "step_id": 9,
       "text": "Hedefinize ulaştınız",
       "location": {
-        "lat": 39.9264923,
-        "lon": 32.8449791
+        "lat": 39.9247175,
+        "lon": 32.8371154
       },
       "action": "finish",
-      "distance_meters": 98,
+      "distance_meters": 33,
       "road_name": null
     }
   ]

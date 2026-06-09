@@ -24,8 +24,10 @@ class VoiceConfig:
     # Text-to-speech gating.
     post_nav_silence_sec: float = 3.0  # Mute obstacle alerts after a nav utterance.
 
-    # GPIO push-button (Jetson Nano).
-    button_pin: int = 18              # BCM pin number.
+    # GPIO push-button (Jetson Nano). BCM 25 = physical pin 22.
+    # Moved off BCM 18 (physical pin 12): that pin is now the I2S bit clock
+    # (I2S_4_SCLK) for the MAX98357A audio amplifier — see hardware/PINOUT.md.
+    button_pin: int = 25              # BCM pin number (physical pin 22).
     button_debounce_ms: int = 300
 
     # SLM intent classifier — minimum confidence to accept a predicted intent.
