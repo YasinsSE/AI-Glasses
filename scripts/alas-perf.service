@@ -9,7 +9,7 @@ After=multi-user.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash /home/alas/AI-Glasses/scripts/jetson_setup.sh
+ExecStart=/bin/bash /home/alas/ALAS_PROJECT/AI-Glasses/scripts/jetson_setup.sh
 RemainAfterExit=yes
 
 [Install]

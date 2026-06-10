@@ -34,10 +34,10 @@ else
     log "WARN: jetson_clocks not found."
 fi
 
-# ── 3. Fan: force a high duty cycle (Waveshare cooling is marginal) ─────────
-# 0-255; 200 is loud-ish but keeps the SoC well under the throttle point
-# during sustained TensorRT inference. Lower to ~140 for indoor demos.
-FAN_PWM="${FAN_PWM:-200}"
+# ── 3. Fan: force full duty cycle (Waveshare cooling is marginal) ───────────
+# 0-255; full power by default — outdoor summer field tests need every bit of
+# cooling headroom. Override for quiet indoor demos: FAN_PWM=140 sudo bash ...
+FAN_PWM="${FAN_PWM:-255}"
 FAN_NODE="/sys/devices/pwm-fan/target_pwm"
 if [ -w "$FAN_NODE" ]; then
     echo "$FAN_PWM" > "$FAN_NODE" && log "fan: target_pwm=$FAN_PWM."
