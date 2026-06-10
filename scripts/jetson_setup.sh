@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # ALAS — Jetson Nano (Waveshare) performance setup.
 #
-# Run ONCE per boot (or install the systemd unit below) BEFORE launching ALAS:
+# OPTIONAL, manual-only: run once per boot BEFORE launching ALAS if you want
+# the performance pins. Nothing runs automatically at boot — the user prefers
+# a stock boot (an autostart unit caused launch-time freezes on the field rig).
 #     sudo bash scripts/jetson_setup.sh
 #
 # Why this exists: the Waveshare Nano carrier ships with weaker cooling than
@@ -71,6 +73,5 @@ for z in /sys/class/thermal/thermal_zone*; do
     log "thermal: $ty = $((t / 1000)) C"
 done
 
-log "Done. One-time extras (run manually once):"
-log "  GUI'yi kapat (~600 MB RAM):  sudo systemctl set-default multi-user.target && sudo reboot"
-log "  Boot'ta otomatik calistir:   sudo cp scripts/alas-perf.service /etc/systemd/system/ && sudo systemctl enable alas-perf"
+log "Done. (Bu script SADECE elle calistiginda etki eder — boot'ta otomatik calisan bir sey yok.)"
+log "One-time extra: GUI'yi kapat (~600 MB RAM):  sudo systemctl set-default multi-user.target && sudo reboot"
