@@ -555,6 +555,14 @@ class SessionRecorder:
             self._events_file.close()
         except Exception:
             pass
+        # Force the page cache to the SD card. The status LED goes dark right
+        # after finalize as the "safe to cut LiPo power" signal — without this
+        # sync the files may still live only in RAM and a power cut would
+        # truncate them despite the LED's promise.
+        try:
+            os.sync()
+        except Exception:
+            pass
         logger.info("[Recorder] Session finalized: %s", self.session_dir)
 
 

@@ -196,14 +196,18 @@ def main():
     )
 
     # 9. Graceful shutdown — stop services, release sensors, drain TTS.
+    # status_led is NOT in services: it must keep fast-blinking through the
+    # whole teardown (incl. recorder finalize) and is stopped LAST inside
+    # shutdown() — a dark LED means "safe to cut LiPo power".
     lifecycle.shutdown(
         button=button,
-        services=[perception, navigation, monitor, status_led],
+        services=[perception, navigation, monitor],
         nav=nav,
         gps=gps,
         voice=voice,
         modes=modes,
         recorder=recorder,
+        status_led=status_led,
     )
     logger.info("[Main] ======== ALAS SYSTEM STOPPED ========")
 

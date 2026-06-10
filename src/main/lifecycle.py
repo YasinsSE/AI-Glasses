@@ -245,7 +245,8 @@ def await_ready(
 #  ORDERED SHUTDOWN
 # ═══════════════════════════════════════════════════════════════════
 
-def shutdown(*, button, services, nav, gps, voice, modes: ModeManager, recorder=None) -> None:
+def shutdown(*, button, services, nav, gps, voice, modes: ModeManager, recorder=None,
+             status_led=None) -> None:
     """
     Stop everything in dependency order:
 
@@ -255,10 +256,16 @@ def shutdown(*, button, services, nav, gps, voice, modes: ModeManager, recorder=
       4. voice.flush()                 ← drain TTS queue (wait_until_done)
       5. voice.shutdown()              ← kill TTS worker (shutdown_tts)
       6. gps.stop()                    ← any time after step 3, kept last
+      7. recorder.finalize()           ← summary.md / viewer.html / GPX to disk
+      8. status_led.stop()             ← LED dark = power-safe, ONLY now
 
     The order matters: pulling the camera before draining audio leaves
     half-spoken alerts queued; closing TTS before nav stops means the
-    "navigation cancelled" announcement is silently dropped.
+    "navigation cancelled" announcement is silently dropped. The status LED
+    fast-blinks through all of this and must be stopped LAST: a dark LED is
+    the user's "LiPo switch may be turned off now" signal, and turning it off
+    before finalize() completes invites a power cut that truncates the
+    session outputs.
     """
     logger.info("[Lifecycle] Shutdown starting.")
     modes.transition_to(SystemMode.SHUTDOWN)
@@ -310,5 +317,12 @@ def shutdown(*, button, services, nav, gps, voice, modes: ModeManager, recorder=
             recorder.finalize()
         except Exception:  # noqa: BLE001
             logger.exception("[Lifecycle] recorder.finalize failed")
+
+    # 8. Everything is on disk — only now may the LED go dark ("power-safe").
+    if status_led is not None:
+        try:
+            status_led.stop()
+        except Exception:  # noqa: BLE001
+            logger.exception("[Lifecycle] status_led.stop failed")
 
     logger.info("[Lifecycle] Shutdown complete.")

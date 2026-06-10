@@ -34,5 +34,11 @@ def test_disabled_returns_none():
     assert _policy(enabled=False)._earcon_path("left") is None
 
 
+def test_earcons_disabled_by_default():
+    """Mono USB speaker rig: panned earcons must stay off out of the box."""
+    from tts_stt.voice_config import VoiceConfig
+    assert VoiceConfig().earcons_enabled is False
+
+
 def test_missing_file_returns_none(tmp_path):
     assert _policy(earcon_dir=str(tmp_path))._earcon_path("left") is None

@@ -34,10 +34,10 @@ class VoiceConfig:
     slm_confidence_threshold: float = 0.60
 
     # Earcons (C4): short stereo tones for the repetitive path-keeping cues
-    # ("hafif sola/sağa"). Spoken corrections every few seconds cause verbal
-    # fatigue — a panned beep carries the same information in 0.3 s and leaves
-    # speech for things that need words. Falls back to speech when the WAVs
-    # are missing or aplay is unavailable. Generate the WAVs once with:
-    #     python3 scripts/generate_earcons.py
-    earcons_enabled: bool = True
+    # ("hafif sola/sağa"). Direction is carried by STEREO PAN, so they are
+    # DISABLED by default: the current rig uses a mono USB speaker, where a
+    # panned beep degrades to a meaningless centred blip. Flip to True only
+    # on stereo output hardware. Speech fallback is automatic while off.
+    # Generate the WAVs once with: python3 scripts/generate_earcons.py
+    earcons_enabled: bool = False
     earcon_dir: str = ""   # "" = src/tts_stt/earcons/ (package default)

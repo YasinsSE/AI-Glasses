@@ -9,7 +9,18 @@ glance. It is driven by ``alas_main`` — the process that actually knows the
     WARMUP (booting)              : steady blink   (~1.25 Hz)
     ACTIVE (running / working)    : SOLID ON
     SLEEP  (auto-STANDBY)         : brief heartbeat pulse every 2 s
-    SHUTDOWN / stopping           : OFF
+    SHUTDOWN (finalizing)         : FAST blink (~4 Hz) — outputs still being
+                                    written; do NOT cut LiPo power yet
+    stopped (safe to cut power)   : OFF
+
+The fast SHUTDOWN blink exists because the recorder's ``finalize()`` (final
+summary, viewer.html, GPX) runs at the very END of the teardown — if the LED
+went dark at the start of shutdown, the user would cut battery power while
+those files were still being written, truncating the session outputs. The LED
+therefore keeps blinking through the whole teardown and only turns off when
+``lifecycle.shutdown`` explicitly calls ``StatusLED.stop()`` as its last step.
+This is why the driver runs on its OWN stop flag, not the global stop_event
+(which is already set while shutdown is still in progress).
 
 **Single owner:** only this driver touches BCM 24, and on exit it cleans up
 ONLY that pin (never a global ``GPIO.cleanup()``), so the launcher's BCM 23 and
@@ -52,16 +63,26 @@ class StatusLED:
         active_low: bool = True,
     ) -> None:
         self._modes = modes
-        self._stop = stop_event
+        self._stop = stop_event  # kept for API symmetry; the loop does NOT exit on it
         self._mock = mock
         self._pin = pin
         self._active_low = active_low  # LED sinks current; pin LOW = on (idle-HIGH safe).
         self._thread: Optional[threading.Thread] = None
+        # Own stop flag: the LED must outlive the global stop_event so it can
+        # blink "finalizing" through the whole shutdown choreography.
+        self._led_stop = threading.Event()
 
     def start(self) -> None:
         target = self._mock_loop if self._mock else self._gpio_loop
         self._thread = threading.Thread(target=target, name=self.name, daemon=True)
         self._thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        """Turn the LED off and stop the driver — call ONLY after all outputs
+        are flushed (lifecycle.shutdown's last step). LED dark = power-safe."""
+        self._led_stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
 
     def is_alive(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -80,7 +101,9 @@ class StatusLED:
             return (t % 0.8) < 0.4            # steady ~1.25 Hz blink
         if mode == SystemMode.SLEEP:
             return (t % 2.0) < 0.1            # brief heartbeat every 2 s
-        return False                          # SHUTDOWN / unknown → off
+        if mode == SystemMode.SHUTDOWN:
+            return (t % 0.25) < 0.125         # FAST ~4 Hz: finalizing, keep power on
+        return False                          # unknown → off
 
     # ── GPIO backend (Jetson Nano) ───────────────────────────────
     def _gpio_loop(self) -> None:
@@ -104,12 +127,14 @@ class StatusLED:
 
         last: Optional[bool] = None
         try:
-            while not self._stop.is_set():
+            # Runs until stop() — NOT until the global stop_event — so the
+            # fast SHUTDOWN blink covers the recorder finalize at teardown end.
+            while not self._led_stop.is_set():
                 level = self._level_for(self._modes.mode, time.monotonic())
                 if level != last:
                     GPIO.output(self._pin, on_level if level else off_level)
                     last = level
-                self._stop.wait(0.05)
+                self._led_stop.wait(0.05)
         finally:
             try:
                 GPIO.output(self._pin, off_level)
@@ -124,9 +149,9 @@ class StatusLED:
     def _mock_loop(self) -> None:
         logger.info("[LED] mock mode — status LED simulated (no GPIO).")
         last: Optional[SystemMode] = None
-        while not self._stop.is_set():
+        while not self._led_stop.is_set():
             mode = self._modes.mode
             if mode != last:
                 logger.debug("[LED] mode → %s", mode.value)
                 last = mode
-            self._stop.wait(0.2)
+            self._led_stop.wait(0.2)

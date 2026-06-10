@@ -22,6 +22,9 @@ pyaudio>=0.2.11
 #   sudo apt install tesseract-ocr tesseract-ocr-tur
 pytesseract>=0.3.8
 
+# -- Analysis machine only (NOT needed on the Jetson) --
+# pillow>=8.0   # Turkish text rendering in eval/field_test/make_demo_video.py
+
 # -- Intent classification (choose one) --
 # Option A: sklearn-based (works everywhere, lighter)
 scikit-learn>=0.20

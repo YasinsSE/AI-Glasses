@@ -85,6 +85,11 @@ class RecorderConfig:
     # Dataset capture (--capture-dataset): raw-frame sink for offline fine-tuning.
     capture_interval_s: float = 4.0      # Min gap between saved raw training frames.
     capture_save_mask: bool = False      # Also dump the predicted mask (label-assist).
+    # Demo mode (--demo): frame-save throttle used INSTEAD of
+    # frame_min_interval_s, so the offline jury-video composer
+    # (eval/field_test/make_demo_video.py) gets a dense frame sequence
+    # (~0.5 s ≈ every perception frame; ~8 MB per 3 min walk).
+    demo_frame_interval_s: float = 0.5
 
 
 @dataclass
@@ -118,6 +123,7 @@ class ALASConfig:
     # ── Field-test recorder ──────────────────────────────────────
     rec: RecorderConfig = field(default_factory=RecorderConfig)
     record: bool = False               # --record: enable the black-box recorder.
+    demo: bool = False                 # --demo: record + dense frames for the jury video.
     live: bool = False                 # --live: one-line stdout dashboard.
     record_dir: str = "outputs/field_tests"
     # --capture-dataset: save raw frames for offline model fine-tuning.
@@ -158,6 +164,10 @@ class ALASConfig:
                             help="Skip only the GPS readiness wait (e.g. indoor dev)")
         parser.add_argument("--record", action="store_true",
                             help="Enable the field-test black-box recorder")
+        parser.add_argument("--demo", action="store_true",
+                            help="Demo recording: implies --record and saves overlay "
+                                 "frames densely (~0.5 s) so make_demo_video.py can "
+                                 "compose a smooth jury video afterwards")
         parser.add_argument("--live", action="store_true",
                             help="Print a one-line live status dashboard to stdout")
         parser.add_argument("--capture-dataset", nargs="?", const="__default__",
@@ -199,6 +209,11 @@ class ALASConfig:
         config.bypass_warmup = args.bypass_warmup
         config.bypass_gps_warmup = args.bypass_gps_warmup
         config.record = args.record
+        config.demo = args.demo
+        if config.demo:
+            # Demo implies recording, with the dense frame throttle.
+            config.record = True
+            config.rec.frame_min_interval_s = config.rec.demo_frame_interval_s
         config.live = args.live
         if args.capture_dataset is not None:
             config.capture_dataset = True

@@ -199,7 +199,28 @@ Besides POI navigation ("en yakın eczane"), the PTT button understands:
 | "durum" | Spoken health summary: GPS quality, SoC temperature, route state |
 | "oku" / "tabela" | OCR the camera frame and read signs aloud (needs `tesseract-ocr-tur`) |
 
-Path-keeping corrections ("hafif sola/sağa") play as **panned stereo earcons**
-(left ear = step left) instead of repeated speech; regenerate the tones with
-`python3 scripts/generate_earcons.py`. Obstacle directions use the blind-navigation
-clock convention ("saat iki yönünde araç") and short distances are spoken in steps.
+Obstacle directions use the blind-navigation clock convention ("saat iki
+yönünde araç") and short distances are spoken in steps. Panned stereo earcons
+for path-keeping exist but are **disabled by default** (the rig uses a mono
+USB speaker — pan carries no information there); enable via
+`voice_config.py: earcons_enabled` on stereo hardware.
+
+## Demo Video & Session Viewer
+
+Every `--record` session writes a self-contained **viewer.html** next to its
+data — double-click to open: summary KPIs, frame-by-frame timeline with
+playback, GPS map, thermal/FPS charts, and a filterable utterance table.
+Regenerate for any session with `python3 eval/field_test/report.py <oturum>/`.
+
+For the jury demo, record the walk with `--demo` (implies `--record`, saves
+frames densely at ~0.5 s), then compose the presentation MP4 on the Mac:
+
+```bash
+# On the Jetson, during the walk:
+python3 -m main.alas_main --model models/segmentation/alas_engine.trt --bypass-stt --demo
+
+# Afterwards, on the analysis machine (needs: pip3 install pillow):
+python3 eval/field_test/make_demo_video.py outputs/field_tests/<oturum>/
+# → <oturum>/demo.mp4 : camera+mask view, live status panel, Turkish subtitles
+#   of every spoken sentence. --speed 2 accelerates, --fps/--max-hold tune pacing.
+```
