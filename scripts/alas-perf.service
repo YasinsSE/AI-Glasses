@@ -5,10 +5,14 @@
 # NOTE: adjust the path below if the repo lives somewhere else on the Jetson.
 [Unit]
 Description=ALAS Jetson performance setup (nvpmodel/jetson_clocks/fan)
-After=multi-user.target
+# nvpmodel/fan sysfs nodes are not ready in early boot — order after the
+# NVIDIA services and still retry once via the pre-sleep, otherwise the unit
+# shows [FAILED] on the boot splash even though a manual run works fine.
+After=multi-user.target nvpmodel.service nvfancontrol.service
 
 [Service]
 Type=oneshot
+ExecStartPre=/bin/sleep 8
 ExecStart=/bin/bash /home/alas/ALAS_PROJECT/AI-Glasses/scripts/jetson_setup.sh
 RemainAfterExit=yes
 

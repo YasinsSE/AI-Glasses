@@ -20,18 +20,31 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# ── 1. Power model: MAXN (all cores, max GPU/EMC clocks) ────────────────────
+# ── 1. Power model: MAXN by default, overridable for weak supplies ──────────
+# If the system freezes on ALAS launch (model-load current spike), the 5V
+# supply cannot feed MAXN — run with NVP_MODE=1 (5W) until the supply is fixed.
+NVP_MODE="${NVP_MODE:-0}"
 if command -v nvpmodel >/dev/null 2>&1; then
-    nvpmodel -m 0 && log "nvpmodel: MAXN (mode 0) set."
+    nvpmodel -m "$NVP_MODE" && log "nvpmodel: mode $NVP_MODE set ($([ "$NVP_MODE" = "0" ] && echo MAXN || echo 5W))."
 else
     log "WARN: nvpmodel not found — is this a Jetson?"
 fi
 
-# ── 2. Lock clocks at the current power model's maximum ─────────────────────
-if command -v jetson_clocks >/dev/null 2>&1; then
-    jetson_clocks && log "jetson_clocks: clocks pinned."
+# ── 2. (Opt-in) Lock clocks at the current power model's maximum ────────────
+# DISABLED by default: pinned max clocks raise the sustained current draw and
+# the TensorRT model-load spike on launch can brown-out a marginal 5V supply
+# (LiPo + converter) — symptom: LED flashes, then the whole system freezes.
+# MAXN alone still allows full boost; DVFS just downclocks at idle. Enable
+# pinning only on a solid bench supply: PIN_CLOCKS=1 sudo bash scripts/jetson_setup.sh
+PIN_CLOCKS="${PIN_CLOCKS:-0}"
+if [ "$PIN_CLOCKS" = "1" ]; then
+    if command -v jetson_clocks >/dev/null 2>&1; then
+        jetson_clocks && log "jetson_clocks: clocks pinned."
+    else
+        log "WARN: jetson_clocks not found."
+    fi
 else
-    log "WARN: jetson_clocks not found."
+    log "jetson_clocks: skipped (PIN_CLOCKS=0 default — brownout-safe)."
 fi
 
 # ── 3. Fan: force full duty cycle (Waveshare cooling is marginal) ───────────
