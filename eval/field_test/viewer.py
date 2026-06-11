@@ -178,6 +178,8 @@ def _prepare(session_dir: Path, events: list) -> dict:
         "inf_avg": round(_avg(infs)) if infs else None,
         "inf_p95": round(_pct(infs, 95)) if infs else None,
         "temp_peak": round(max(temps_all), 1) if temps_all else None,
+        "walkable_avg": round(_avg([p["walkable"] for p in percs
+                                    if p.get("walkable") is not None]), 3),
         "walked_m": round(walked) if gps else None,
         "n_spoken": len(spoken),
         "n_suppressed": len(suppressed),
@@ -215,15 +217,17 @@ _TEMPLATE = r"""<!DOCTYPE html>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg:#0e1116; --panel:#161b24; --panel2:#1d2430; --line:#2a3342;
-  --txt:#dbe2ee; --dim:#8593a8; --accent:#4da3ff;
-  --safe:#2fa86c; --caution:#d99a26; --unsafe:#e05252; --nav:#4da3ff;
+  /* ALAS identity: near-black canvas + signal red accent. */
+  --bg:#0c0c0e; --panel:#151517; --panel2:#1d1d21; --line:#2b2b31;
+  --txt:#e8e6e3; --dim:#8e8b94; --accent:#e23b3b; --accent2:#ff6b57;
+  --safe:#2fa86c; --caution:#d99a26; --unsafe:#e23b3b; --nav:#4da3ff;
 }
 body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
        background: var(--bg); color: var(--txt); }
 header { display:flex; align-items:baseline; gap:14px; padding:14px 22px;
-         background:linear-gradient(90deg,#121826,#0e1116); border-bottom:1px solid var(--line); }
-header h1 { font-size:1.15rem; letter-spacing:.04em; }
+         background:linear-gradient(90deg,#17090b,#0c0c0e 60%);
+         border-bottom:2px solid var(--accent); }
+header h1 { font-size:1.15rem; letter-spacing:.14em; font-weight:800; }
 header h1 span { color:var(--accent); }
 header .sub { color:var(--dim); font-size:.8rem; }
 nav.tabs { display:flex; gap:4px; padding:8px 22px 0; background:var(--bg);
@@ -232,7 +236,7 @@ nav.tabs button { background:none; border:1px solid transparent; border-bottom:n
   color:var(--dim); padding:8px 16px; font-size:.86rem; cursor:pointer;
   border-radius:8px 8px 0 0; }
 nav.tabs button.on { background:var(--panel); color:var(--txt);
-  border-color:var(--line); }
+  border-color:var(--line); border-top:2px solid var(--accent); }
 main { padding:18px 22px; }
 section.tab { display:none; }
 section.tab.on { display:block; }
@@ -250,10 +254,14 @@ section.tab.on { display:block; }
 .breakdown li { list-style:none; font-size:.84rem; padding:2px 0; display:flex; justify-content:space-between; gap:18px; }
 .breakdown li b { color:var(--accent); }
 
-/* Zaman çizelgesi */
-.tl-wrap { display:grid; grid-template-columns: minmax(0,1fr) 330px; gap:16px; }
-.viewer { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
-.viewer img { width:100%; display:block; min-height:200px; background:#000; }
+/* Zaman çizelgesi — kare yaklaşık doğal çözünürlükte (512 px) tutulur:
+   büyütme = bulanıklık. Kalan genişlik olay akışına gider. */
+.tl-wrap { display:grid; grid-template-columns: 540px minmax(0,1fr); gap:16px; }
+@media (max-width: 980px) { .tl-wrap { grid-template-columns: 1fr; } }
+.viewer { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+  overflow:hidden; max-width:540px; }
+.viewer img { width:100%; display:block; min-height:200px; background:#000;
+  image-rendering:auto; }
 .viewer .bar { display:flex; align-items:center; gap:10px; padding:8px 12px; font-size:.8rem; color:var(--dim); }
 .viewer .bar .t { color:var(--txt); font-variant-numeric:tabular-nums; }
 .viewer .bar button { background:var(--panel2); color:var(--txt); border:1px solid var(--line);
@@ -290,9 +298,12 @@ section.tab.on { display:block; }
 /* Grafikler */
 .chart { background:var(--panel); border:1px solid var(--line); border-radius:10px;
   padding:12px 14px; margin-bottom:14px; }
-.chart h3 { font-size:.82rem; color:var(--dim); margin-bottom:6px; }
-.chart svg { width:100%; height:130px; display:block; }
-.chart .tip { font-size:.74rem; color:var(--accent); min-height:1em; }
+.chart h3 { font-size:.82rem; color:var(--dim); margin-bottom:2px; }
+.chart .stats { font-size:.72rem; color:var(--dim); margin-bottom:6px; }
+.chart .stats b { color:var(--txt); font-weight:600; }
+.chart svg { width:100%; height:170px; display:block; cursor:crosshair; }
+.chart .tip { font-size:.76rem; color:var(--accent2); min-height:1.1em;
+  font-variant-numeric:tabular-nums; }
 
 /* Konuşmalar */
 .filters { display:flex; gap:12px; margin-bottom:12px; align-items:center; font-size:.84rem; color:var(--dim); }
@@ -359,7 +370,8 @@ kbd { background:var(--panel2); border:1px solid var(--line); border-radius:4px;
 <script>
 const D = JSON.parse(document.getElementById('data').textContent);
 const S = D.summary;
-const fmt = (t) => { const m = Math.floor(t/60), s = Math.floor(t%60); return m+':'+String(s).padStart(2,'0'); };
+// Tek zaman dili: overlay kareleri "t+97s" yazdığı için her yerde saniye.
+const fmt = (t) => Math.round(t) + 's';
 const esc = (x) => String(x ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
 /* ── Tabs ── */
@@ -373,22 +385,41 @@ tabs.addEventListener('click', (e) => {
 
 /* ── Özet ── */
 function kpi(l, v, s) { return `<div class="kpi"><div class="l">${l}</div><div class="v">${v ?? '–'}</div>${s?`<div class="s">${s}</div>`:''}</div>`; }
+const talkRate = S.duration_s>0 ? S.n_spoken/(S.duration_s/60) : 0;
 document.getElementById('kpis').innerHTML =
-  kpi('Süre', fmt(S.duration_s), S.duration_s.toFixed(0)+' sn') +
+  kpi('Süre', fmt(S.duration_s), (S.duration_s/60).toFixed(1)+' dk') +
   kpi('İşlenen Kare', S.n_frames_processed, S.n_frames_saved + ' kayıtlı görüntü') +
   kpi('Algı FPS', S.fps_avg ?? '–', S.fps_min!=null ? 'min '+S.fps_min : '') +
   kpi('Inference', S.inf_avg!=null ? S.inf_avg+' ms' : '–', S.inf_p95!=null ? 'p95 '+S.inf_p95+' ms' : '') +
   kpi('Tepe Sıcaklık', S.temp_peak!=null ? S.temp_peak+' °C' : '–', S.temp_peak>=70?'⚠ termal eşik üstü':'') +
+  kpi('Ort. Yürünebilir', S.walkable_avg!=null ? '%'+(S.walkable_avg*100).toFixed(0) : '–', 'algı karelerinin ortalaması') +
   kpi('Yürünen Mesafe', S.walked_m!=null ? S.walked_m+' m' : '–', S.walked_m==null?'GPS verisi yok':'') +
-  kpi('Konuşma', S.n_spoken, (S.duration_s>0? (S.n_spoken/(S.duration_s/60)).toFixed(1)+' / dk':'')) +
+  kpi('Konuşma', S.n_spoken, talkRate.toFixed(1)+' / dk' + (talkRate>8 ? ' ⚠ yüksek' : '')) +
   kpi('Bastırılan', S.n_suppressed, (S.reasons.muted_unsafe? '⚠ muted_unsafe: '+S.reasons.muted_unsafe : ''));
 function listBox(title, obj) {
   const items = Object.entries(obj).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<li>${esc(k)} <b>${v}</b></li>`).join('');
   return `<div class="box"><h3>${title}</h3><ul>${items || '<li class="empty">yok</li>'}</ul></div>`;
 }
+// En çok tekrarlanan cümleler — gevezelik teşhisinin ilk bakılacak yeri.
+const topTexts = {};
+D.speaks.filter(s=>s.spoken).forEach(s => { topTexts[s.text] = (topTexts[s.text]||0)+1; });
+const top5 = Object.fromEntries(Object.entries(topTexts).sort((a,b)=>b[1]-a[1]).slice(0,5)
+  .map(([k,v]) => [k.length>34 ? k.slice(0,33)+'…' : k, v]));
+// Güvenlik dağılımı yüzde çubuğu olarak.
+const sc = S.safety_counts, scTot = (sc.safe+sc.caution+sc.unsafe) || 1;
+const safetyBar = `<div class="box"><h3>Güvenlik dağılımı (kare)</h3>
+  <div style="display:flex;height:14px;border-radius:7px;overflow:hidden;margin:6px 0 8px">
+    <div style="width:${100*sc.safe/scTot}%;background:var(--safe)"></div>
+    <div style="width:${100*sc.caution/scTot}%;background:var(--caution)"></div>
+    <div style="width:${100*sc.unsafe/scTot}%;background:var(--unsafe)"></div></div>
+  <ul>
+    <li>SAFE <b>%${(100*sc.safe/scTot).toFixed(0)} (${sc.safe})</b></li>
+    <li>CAUTION <b>%${(100*sc.caution/scTot).toFixed(0)} (${sc.caution})</b></li>
+    <li>UNSAFE <b>%${(100*sc.unsafe/scTot).toFixed(0)} (${sc.unsafe})</b></li>
+  </ul></div>`;
 document.getElementById('breakdown').innerHTML =
-  listBox('Konuşma türleri', S.methods) + listBox('Bastırma sebepleri', S.reasons) +
-  listBox('Güvenlik dağılımı (kare)', S.safety_counts);
+  listBox('En çok tekrarlananlar', top5) + safetyBar +
+  listBox('Konuşma türleri', S.methods) + listBox('Bastırma sebepleri', S.reasons);
 
 /* ── Zaman çizelgesi ── */
 const frames = D.frames; let idx = 0, playing = false, playTimer = null;
@@ -508,41 +539,88 @@ function initMap() {
 if (!D.gps.length) document.getElementById('tab-harita').style.display = 'none';
 
 /* ── Grafikler ── */
+const CHARTS = [];  // mousemove tooltip için seri verileri
 function chart(title, series, unit) {
   // series: [{label, color, pts:[[t,v],...]}]
+  series = series.filter(s => s.pts.length);
   const all = series.flatMap(s => s.pts);
   if (!all.length) return '';
-  const W = 1000, H = 130, PAD = 34;
-  const vmax = Math.max(...all.map(p => p[1])), vmin = Math.min(...all.map(p => p[1]));
-  const span = (vmax - vmin) || 1;
-  const X = t => PAD + (W-2*PAD) * t / (D.duration || 1);
-  const Y = v => (H-18) - (H-30) * (v - vmin) / span;
-  let paths = series.map(s =>
-    `<path fill="none" stroke="${s.color}" stroke-width="1.6" d="M` +
+  const W = 1000, H = 170, PADL = 44, PADR = 10, PADT = 24, PADB = 20;
+  let vmax = Math.max(...all.map(p => p[1])), vmin = Math.min(...all.map(p => p[1]));
+  if (vmax === vmin) { vmax += 1; vmin -= 1; }
+  const pad = (vmax - vmin) * 0.08; vmax += pad; vmin = Math.max(0, vmin - pad);
+  const span = vmax - vmin;
+  const X = t => PADL + (W-PADL-PADR) * t / (D.duration || 1);
+  const Y = v => (H-PADB) - (H-PADT-PADB) * (v - vmin) / span;
+  // Yatay kılavuz çizgileri: 4 seviye, değer etiketli.
+  let grid = '';
+  for (let i = 0; i <= 3; i++) {
+    const v = vmin + span * i / 3, y = Y(v);
+    grid += `<line x1="${PADL}" y1="${y}" x2="${W-PADR}" y2="${y}" stroke="#2b2b31" stroke-width="1"/>`
+          + `<text x="${PADL-6}" y="${y+4}" font-size="11" fill="#8e8b94" text-anchor="end">${v >= 100 ? v.toFixed(0) : v.toFixed(1).replace(/\.0$/,'')}</text>`;
+  }
+  // Zaman etiketleri (4 nokta).
+  for (let i = 0; i <= 3; i++) {
+    const t = (D.duration||1) * i / 3;
+    grid += `<text x="${X(t)}" y="${H-5}" font-size="11" fill="#8e8b94" text-anchor="middle">${fmt(t)}</text>`;
+  }
+  // İlk seri için alan dolgusu + ortalama kesikli çizgisi.
+  const s0 = series[0];
+  const avg0 = s0.pts.reduce((a,p)=>a+p[1],0)/s0.pts.length;
+  const area = `<path fill="${s0.color}" fill-opacity="0.10" stroke="none" d="M${X(s0.pts[0][0]).toFixed(1)},${Y(vmin)} L`
+    + s0.pts.map(p=>`${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(' L ')
+    + ` L${X(s0.pts[s0.pts.length-1][0]).toFixed(1)},${Y(vmin)} Z"/>`;
+  const avgLine = `<line x1="${PADL}" y1="${Y(avg0)}" x2="${W-PADR}" y2="${Y(avg0)}" stroke="${s0.color}" stroke-dasharray="5,4" stroke-opacity="0.6"/>`
+    + `<text x="${W-PADR}" y="${Y(avg0)-4}" font-size="10" fill="${s0.color}" text-anchor="end">ort ${avg0.toFixed(1)}</text>`;
+  const paths = series.map(s =>
+    `<path fill="none" stroke="${s.color}" stroke-width="1.8" d="M` +
     s.pts.map(p => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(' L ') + '"/>').join('');
-  let marks = D.sysMarks.map(m =>
-    `<line x1="${X(m.t)}" y1="10" x2="${X(m.t)}" y2="${H-18}" stroke="#e05252" stroke-dasharray="3,3"/>` +
-    `<title>${esc(m.label)}</title>`).join('');
-  const legend = series.map(s => `<tspan fill="${s.color}">● ${s.label}</tspan>  `).join('');
-  return `<div class="chart"><h3>${title}</h3>
-    <svg viewBox="0 0 ${W} ${H}" data-unit="${unit}">
-      <text x="${PAD}" y="12" font-size="11" fill="#8593a8">${legend}</text>
-      <text x="2" y="${Y(vmax)+4}" font-size="10" fill="#8593a8">${vmax.toFixed(0)}</text>
-      <text x="2" y="${Y(vmin)+4}" font-size="10" fill="#8593a8">${vmin.toFixed(0)}</text>
-      ${marks}${paths}
-    </svg><div class="tip"></div></div>`;
+  const marks = D.sysMarks.map(m =>
+    `<line x1="${X(m.t)}" y1="${PADT}" x2="${X(m.t)}" y2="${H-PADB}" stroke="var(--unsafe)" stroke-dasharray="3,3"><title>${esc(m.label)}</title></line>`).join('');
+  // Seri başına min/ort/maks özeti — grafiğe bakmadan da okunabilir.
+  const stats = series.map(s => {
+    const vs = s.pts.map(p=>p[1]);
+    const a = vs.reduce((x,y)=>x+y,0)/vs.length;
+    return `<span style="color:${s.color}">●</span> ${s.label}: min <b>${Math.min(...vs).toFixed(1)}</b> · ort <b>${a.toFixed(1)}</b> · maks <b>${Math.max(...vs).toFixed(1)}</b>`;
+  }).join(' &nbsp;|&nbsp; ');
+  const id = 'ch' + CHARTS.length;
+  CHARTS.push({id, series, unit, X0:PADL, X1:W-PADR, W});
+  return `<div class="chart"><h3>${title}</h3><div class="stats">${stats}</div>
+    <svg id="${id}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      ${grid}${area}${avgLine}${marks}${paths}
+      <line id="${id}-cur" y1="${PADT}" y2="${H-PADB}" stroke="#e8e6e3" stroke-opacity="0" stroke-width="1"/>
+    </svg><div class="tip" id="${id}-tip">&nbsp;</div></div>`;
 }
 const pcs = D.percs, tlm = D.telem;
 document.getElementById('grafik').innerHTML =
   chart('Yürünebilir alan (%)',
     [{label:'walkable %', color:'#2fa86c', pts: pcs.filter(p=>p.walkable!=null).map(p=>[p.t, p.walkable*100])}], '%') +
-  chart('Inference süresi (ms)',
-    [{label:'inference ms', color:'#4da3ff', pts: pcs.filter(p=>p.inf!=null).map(p=>[p.t, p.inf])},
-     {label:'toplam ms', color:'#9a7bd0', pts: pcs.filter(p=>p.total!=null).map(p=>[p.t, p.total])}], 'ms') +
-  chart('Termal ve GPU',
+  chart('Algı gecikmesi (ms)',
+    [{label:'inference', color:'#4da3ff', pts: pcs.filter(p=>p.inf!=null).map(p=>[p.t, p.inf])},
+     {label:'kare toplam', color:'#9a7bd0', pts: pcs.filter(p=>p.total!=null).map(p=>[p.t, p.total])}], 'ms') +
+  chart('Sıcaklık ve yük',
     [{label:'SoC °C', color:'#d99a26', pts: tlm.filter(t=>t.temp!=null).map(t=>[t.t, t.temp])},
-     {label:'GPU %', color:'#e05252', pts: tlm.filter(t=>t.gpu!=null).map(t=>[t.t, t.gpu])},
-     {label:'RAM %', color:'#8593a8', pts: tlm.filter(t=>t.ram!=null).map(t=>[t.t, t.ram])}], '');
+     {label:'GPU %', color:'#e23b3b', pts: tlm.filter(t=>t.gpu!=null).map(t=>[t.t, t.gpu])},
+     {label:'RAM %', color:'#8e8b94', pts: tlm.filter(t=>t.ram!=null).map(t=>[t.t, t.ram])}], '');
+// Fare ile değer okuma: imlecin olduğu andaki tüm serilerin değeri.
+CHARTS.forEach(c => {
+  const svg = document.getElementById(c.id), tip = document.getElementById(c.id+'-tip');
+  const cur = document.getElementById(c.id+'-cur');
+  svg.addEventListener('mousemove', (e) => {
+    const r = svg.getBoundingClientRect();
+    const xFrac = (e.clientX - r.left) / r.width * c.W;
+    const t = Math.max(0, Math.min(D.duration, (xFrac - c.X0) / (c.X1 - c.X0) * D.duration));
+    cur.setAttribute('x1', xFrac.toFixed(1)); cur.setAttribute('x2', xFrac.toFixed(1));
+    cur.setAttribute('stroke-opacity', '0.35');
+    const vals = c.series.map(s => {
+      let b = s.pts[0];
+      for (const p of s.pts) if (Math.abs(p[0]-t) < Math.abs(b[0]-t)) b = p;
+      return `${s.label}: ${b[1].toFixed(1)}${c.unit}`;
+    });
+    tip.textContent = `t+${fmt(t)} — ` + vals.join('  ·  ');
+  });
+  svg.addEventListener('mouseleave', () => { cur.setAttribute('stroke-opacity','0'); tip.innerHTML = '&nbsp;'; });
+});
 
 /* ── Konuşmalar ── */
 const fM = document.getElementById('fMethod'), fS = document.getElementById('fSup');

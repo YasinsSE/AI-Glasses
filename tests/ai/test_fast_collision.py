@@ -39,16 +39,33 @@ def _service():
     return svc, voice
 
 
-def _blocked_result():
-    """Mask whose near-centre tripwire region is 100% vehicle."""
-    mask = np.zeros((384, 512), dtype=np.uint8)
-    mask[230:, 153:359] = int(ClassID.VEHICLE)
+def _result(mask):
     return SimpleNamespace(
         mask=mask,
         scene=SimpleNamespace(safety_level=2, is_safe=False,
                               walkable_ratio=0.0, dominant_hazard="vehicle"),
         alerts=[],
     )
+
+
+def _blocked_result():
+    """Truly boxed in: the ENTIRE bottom band is vehicle — no escape zone.
+
+    (np.zeros means class 0 = WALKABLE_SURFACE, so anything left at zero in
+    the bottom band would count as an exit for the escape check.)
+    """
+    mask = np.zeros((384, 512), dtype=np.uint8)
+    mask[230:, :] = int(ClassID.VEHICLE)
+    return _result(mask)
+
+
+def _corridor_result():
+    """Centre flooded by vehicles BUT a green corridor on the left — the
+    field-test 10-06 'parked car row' case. Must steer, not stop."""
+    mask = np.zeros((384, 512), dtype=np.uint8)
+    mask[230:, :] = int(ClassID.VEHICLE)
+    mask[230:, :160] = int(ClassID.WALKABLE_SURFACE)  # left walkway
+    return _result(mask)
 
 
 def test_tripwire_fires_after_persistence_and_preempts():
@@ -59,17 +76,52 @@ def test_tripwire_fires_after_persistence_and_preempts():
     assert voice.said == [("Durun, önünüz kapalı", True, True)]
 
 
-def test_tripwire_respects_urgent_cooldown():
+def test_walkable_corridor_stands_down():
+    """Escape on the side → no 'Durun'; the normal flow steers via VFH."""
+    svc, voice = _service()
+    res = _corridor_result()
+    for i in range(6):
+        assert svc._fast_collision_check(res, now=100.0 + i) is False
+    assert voice.said == []
+
+
+def test_walkable_dead_ahead_stands_down():
+    """Centre region keeps enough walkable → cannot be 'önünüz kapalı'."""
+    svc, voice = _service()
+    mask = np.zeros((384, 512), dtype=np.uint8)
+    mask[230:, :] = int(ClassID.VEHICLE)
+    # Re-open a walkable stripe inside the centre tripwire region (>25%).
+    mask[230:, 200:260] = int(ClassID.WALKABLE_SURFACE)
+    res = _result(mask)
+    for i in range(6):
+        assert svc._fast_collision_check(res, now=100.0 + i) is False
+    assert voice.said == []
+
+
+def test_standing_blockage_repeats_slowly_without_preempt():
+    """Same standing wall: repeat at fast_collision_repeat_sec (8 s), and the
+    repeats must NOT preempt (only the fresh trigger does)."""
     svc, voice = _service()
     res = _blocked_result()
     svc._fast_collision_check(res, now=100.0)
-    svc._fast_collision_check(res, now=100.5)
-    # Still blocked moments later → no second scream inside the cooldown.
-    assert svc._fast_collision_check(res, now=101.0) is False
-    assert len(voice.said) == 1
-    # After the cooldown it may re-warn.
-    assert svc._fast_collision_check(res, now=103.0) is True
-    assert len(voice.said) == 2
+    assert svc._fast_collision_check(res, now=100.5) is True   # fresh: preempt
+    assert svc._fast_collision_check(res, now=103.0) is False  # 2.5 s later: silent now
+    assert svc._fast_collision_check(res, now=106.0) is False  # still inside 8 s
+    assert svc._fast_collision_check(res, now=109.0) is True   # 8.5 s: re-warn
+    assert voice.said == [("Durun, önünüz kapalı", True, True),
+                          ("Durun, önünüz kapalı", True, False)]
+
+
+def test_cleared_blockage_rearms_fresh_trigger():
+    """Blockage clears, then a NEW wall appears → preempting warn again."""
+    svc, voice = _service()
+    clear = _result(np.zeros((384, 512), dtype=np.uint8))
+    svc._fast_collision_check(_blocked_result(), now=100.0)
+    svc._fast_collision_check(_blocked_result(), now=100.5)   # spoke (fresh)
+    svc._fast_collision_check(clear, now=101.0)               # cleared → re-arm
+    svc._fast_collision_check(_blocked_result(), now=103.0)   # arming
+    assert svc._fast_collision_check(_blocked_result(), now=103.5) is True
+    assert voice.said[-1] == ("Durun, önünüz kapalı", True, True)  # preempts again
 
 
 def test_single_noisy_frame_does_not_fire():

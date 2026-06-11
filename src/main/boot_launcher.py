@@ -62,25 +62,24 @@ PRESS_CONFIRM_GAP_SEC = 0.01
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))   # .../src/main
 SRC_DIR = os.path.dirname(_THIS_DIR)                      # .../src
 
-# The command alas_main is launched with. TEST configuration for now; edit this
-# single list once field tests finish.
-#   --bypass-stt    : no microphone — skip STT.
+# The command alas_main is launched with. MICROPHONE TEST configuration: the
+# PTT button now opens a real STT session (prompt → listen → intent → route),
+# so the mic-less crutches are off.
 #   --record        : field-test black-box recorder (outputs/field_tests/<ts>/).
 #   --auto-standby  : power-save STANDBY after ~idle_enter_sec of stillness.
-#   --auto-nav eczane : no-mic auto-route to nearest pharmacy on startup; a PTT
-#                       press re-triggers the same route.
 LAUNCH_CMD = [
     sys.executable, "-m", "main.alas_main",
     "--model", "models/segmentation/alas_engine.trt",
-    "--bypass-stt",
     "--record",
     "--auto-standby",
-    # Test destination - A PTT press re-routes here from the current spot.
-    "--auto-nav-coord", "39.988679,32.863508",
-    # press now also saves frames to outputs/dataset_raw/. DELETE this single
-    # line once data collection is done — we won't be gathering training data
-    # again. (Add "--capture-masks" on its own line for Roboflow label-assist.)
-    "--capture-dataset",
+    # ── Mic-less fallbacks, disabled for the microphone tests ──────────────
+    # Re-enable --bypass-stt + --auto-nav-coord together if the mic fails in
+    # the field (PTT then re-routes to the fixed destination instead of STT).
+    # "--bypass-stt",
+    # "--auto-nav-coord", "39.988679,32.863508",
+    # Training-data capture (saves raw frames to outputs/dataset_raw/) — off
+    # for now so the loop stays lean. Re-add when collecting data again.
+    # "--capture-dataset",
 ]
 
 logger = logging.getLogger("ALAS.launcher")

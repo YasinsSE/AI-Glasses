@@ -209,7 +209,19 @@ class STTEngine:
     # SINGLE-SHOT LISTENING
     # ──────────────────────────────────────────────────────────────────────
 
-    def listen(self, timeout_sec: float = 5.0, silence_sec: float = 1.5) -> str:
+    def listen(self, timeout_sec: float = 5.0, silence_sec: float = 1.5,
+               grammar=None) -> str:
+        """Single PTT listening session.
+
+        The PyAudio stream is opened HERE and closed in the ``finally`` —
+        the microphone is captured only while this call runs, never between
+        button presses.
+
+        ``grammar`` optionally restricts recognition to a small phrase list
+        (e.g. ``["evet", "hayır", "iptal"]``) — Vosk then only ever outputs
+        those words, which makes short yes/no confirmations far more robust
+        than open-vocabulary decoding.
+        """
         stream = self._audio.open(
             format=FORMAT,
             channels=CHANNELS,
@@ -219,7 +231,13 @@ class STTEngine:
         )
 
         print("[STT] Listening...")
-        recognizer = KaldiRecognizer(self.model, SAMPLE_RATE)
+        if grammar:
+            recognizer = KaldiRecognizer(
+                self.model, SAMPLE_RATE,
+                json.dumps(list(grammar) + ["[unk]"], ensure_ascii=False),
+            )
+        else:
+            recognizer = KaldiRecognizer(self.model, SAMPLE_RATE)
 
         start = time.time()
         result_text = ""

@@ -1,116 +1,126 @@
 {
-  "saved_at": "2026-06-09T17:34:54.181865",
+  "saved_at": "2026-06-11T12:47:57.141165",
   "step_count": 10,
   "steps": [
     {
       "step_id": 0,
-      "text": "Rota başlıyor. Süleyman Bey Sokak üzerindesiniz",
+      "text": "Rota başlıyor. Unnamed road üzerindesiniz",
       "location": {
-        "lat": 39.9244955,
-        "lon": 32.8456618
+        "lat": 39.9244389,
+        "lon": 32.8465435
       },
       "action": "start",
       "distance_meters": 0,
-      "road_name": "Süleyman Bey Sokak"
+      "road_name": "Unnamed road",
+      "road_type": "service"
     },
     {
       "step_id": 1,
-      "text": "sola dönün",
+      "text": "sert sağa dönün",
       "location": {
-        "lat": 39.9249049,
-        "lon": 32.8452056
+        "lat": 39.9247742,
+        "lon": 32.8460924
       },
-      "action": "turn_left",
-      "distance_meters": 59,
-      "road_name": "Unnamed road"
+      "action": "turn_right",
+      "distance_meters": 54,
+      "road_name": "Şehit Gönenç Caddesi",
+      "road_type": "secondary"
     },
     {
       "step_id": 2,
-      "text": "sağa dönün",
+      "text": "düz devam edin",
       "location": {
-        "lat": 39.9251434,
-        "lon": 32.8436147
+        "lat": 39.9249406,
+        "lon": 32.8462865
       },
-      "action": "turn_right",
-      "distance_meters": 181,
-      "road_name": "Unnamed road"
+      "action": "continue",
+      "distance_meters": 24,
+      "road_name": "Unnamed road",
+      "road_type": "secondary"
     },
     {
       "step_id": 3,
-      "text": "düz devam edin",
+      "text": "sağa dönün",
       "location": {
-        "lat": 39.9246946,
-        "lon": 32.8419856
+        "lat": 39.9251616,
+        "lon": 32.8465325
       },
-      "action": "continue",
-      "distance_meters": 147,
-      "road_name": "Akdeniz Caddesi"
+      "action": "turn_right",
+      "distance_meters": 32,
+      "road_name": "Maltepe Köprüsü",
+      "road_type": "secondary"
     },
     {
       "step_id": 4,
-      "text": "sert sağa dönün",
+      "text": "düz devam edin",
       "location": {
-        "lat": 39.9222876,
-        "lon": 32.837737
+        "lat": 39.9268671,
+        "lon": 32.8492391
       },
-      "action": "turn_right",
-      "distance_meters": 463,
-      "road_name": "Unnamed road"
+      "action": "continue",
+      "distance_meters": 302,
+      "road_name": "Unnamed road",
+      "road_type": "secondary"
     },
     {
       "step_id": 5,
-      "text": "düz devam edin",
+      "text": "sert sağa dönün",
       "location": {
-        "lat": 39.9223793,
-        "lon": 32.8376759
+        "lat": 39.92696,
+        "lon": 32.8494426
       },
-      "action": "continue",
-      "distance_meters": 11,
-      "road_name": "Dumlupınar Yolu"
+      "action": "turn_right",
+      "distance_meters": 20,
+      "road_name": "Strazburg Caddesi",
+      "road_type": "secondary"
     },
     {
       "step_id": 6,
-      "text": "sert sağa dönün",
+      "text": "sola dönün",
       "location": {
-        "lat": 39.9240275,
-        "lon": 32.8366262
+        "lat": 39.926345,
+        "lon": 32.8485699
       },
-      "action": "turn_right",
-      "distance_meters": 205,
-      "road_name": "Unnamed road"
+      "action": "turn_left",
+      "distance_meters": 101,
+      "road_name": "Unnamed road",
+      "road_type": "secondary"
     },
     {
       "step_id": 7,
-      "text": "sert sola dönün",
+      "text": "sola dönün",
       "location": {
-        "lat": 39.9244713,
-        "lon": 32.8373642
+        "lat": 39.9262492,
+        "lon": 32.8484829
       },
       "action": "turn_left",
-      "distance_meters": 79,
-      "road_name": "Unnamed road"
+      "distance_meters": 13,
+      "road_name": "Strazburg Caddesi",
+      "road_type": "primary_link"
     },
     {
       "step_id": 8,
-      "text": "sert sola dönün",
+      "text": "sola dönün",
       "location": {
-        "lat": 39.9245629,
-        "lon": 32.8372713
+        "lat": 39.9256003,
+        "lon": 32.8477659
       },
       "action": "turn_left",
-      "distance_meters": 12,
-      "road_name": "Unnamed road"
+      "distance_meters": 95,
+      "road_name": "Gazi Mustafa Kemal Bulvarı",
+      "road_type": "primary"
     },
     {
       "step_id": 9,
       "text": "Hedefinize ulaştınız",
       "location": {
-        "lat": 39.9247175,
-        "lon": 32.8371154
+        "lat": 39.9252281,
+        "lon": 32.8479343
       },
       "action": "finish",
-      "distance_meters": 33,
-      "road_name": null
+      "distance_meters": 43,
+      "road_name": null,
+      "road_type": null
     }
   ]
 }

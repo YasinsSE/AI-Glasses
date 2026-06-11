@@ -33,6 +33,23 @@ class VoiceConfig:
     # SLM intent classifier — minimum confidence to accept a predicted intent.
     slm_confidence_threshold: float = 0.60
 
+    # Spoken navigation confirmation. A terse command ("eczane", "eczaneye
+    # git") starts routing immediately, but a destination INFERRED from a
+    # longer utterance ("ilaç almak istiyorum eczaneye gitmem lazım") is
+    # confirmed first — STT mishears, and walking a blind user to the wrong
+    # place is far costlier than one extra question. Only applies on the
+    # microphone path; typed --bypass-stt commands are already explicit.
+    nav_confirm_enabled: bool = True
+    nav_confirm_min_words: int = 3        # utterances with >= this many words confirm first
+    confirm_listen_timeout: float = 6.0   # seconds to wait for the yes/no answer
+    confirm_silence_sec: float = 1.2
+
+    # Deferred navigation for urban canyons (Kızılay case): a nav command
+    # arriving while GPS has no fix is QUEUED instead of refused — the user
+    # keeps walking, and routing starts automatically (with an announcement)
+    # the moment a fix arrives. Gives up with a spoken notice after this long.
+    pending_route_timeout_sec: float = 180.0
+
     # Earcons (C4): short stereo tones for the repetitive path-keeping cues
     # ("hafif sola/sağa"). Direction is carried by STEREO PAN, so they are
     # DISABLED by default: the current rig uses a mono USB speaker, where a

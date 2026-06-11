@@ -102,9 +102,13 @@ class AIConfig:
     # ── Path-keeping (Faz 2) ─────────────────────────────────────────────────
     # When nothing blocks the centerline ahead, keep the user on the walkable
     # corridor instead of announcing every side car.
-    centerline_drift_warn: float = 0.40       # smoothed |offset| above this → "hafif sola/sağa"
+    # Field-test 10-06 feedback: users want an assistant that actively keeps
+    # them centred, not only hazard warnings — so corrections kick in a bit
+    # earlier (0.40→0.35) and may repeat a bit sooner (8→6 s, matching the
+    # VFH announce cooldown).
+    centerline_drift_warn: float = 0.35       # smoothed |offset| above this → "hafif sola/sağa"
     path_confirm_interval_sec: float = 25.0   # periodic "Düz devam edin" when centred (rare)
-    path_correct_interval_sec: float = 8.0    # min gap between drift corrections
+    path_correct_interval_sec: float = 6.0    # min gap between drift corrections
     # Faz 3 — quieter path-keeping + event-driven obstacle awareness.
     offset_ema_alpha: float = 0.4             # EMA smoothing of the corridor offset (anti-flicker)
     drift_clear_band: float = 0.25            # |offset| below this → back to "straight" (hysteresis)
@@ -141,6 +145,18 @@ class AIConfig:
     fast_collision_enabled: bool = True
     fast_collision_ratio: float = 0.45
     fast_collision_persist_frames: int = 2
+    # Escape awareness (field-test 10-06 lesson: 40× "Durun" while a green
+    # corridor ran along the parked cars). A full STOP is only justified when
+    # the user is genuinely boxed in — if a walkable corridor exists in the
+    # bottom side zones (or straight ahead), the tripwire stands down and the
+    # normal flow steers with VFH ("hafif sola yönelin") instead of freezing
+    # the user mid-sidewalk.
+    fast_collision_escape_walkable: float = 0.22   # side-zone walkable share that counts as an exit
+    fast_collision_center_walkable: float = 0.25   # this much walkable dead-ahead ≠ "kapalı"
+    # Edge-triggered repeat: once "Durun" is spoken the same standing
+    # situation repeats at this interval (not urgent_interval_sec=2 s, which
+    # turned a parked-car row into a 40-shout walk).
+    fast_collision_repeat_sec: float = 8.0
 
     # ── Situation tracking / escalation ──────────────────────────────────
     # A hazard must persist in the forward path for this many consecutive

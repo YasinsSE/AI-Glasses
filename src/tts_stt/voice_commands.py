@@ -59,6 +59,14 @@ class VoiceCommandHandler:
     SHUTDOWN_WORDS = ["kapat", "durdur", "bitir", "kapa"]
     STOP_NAV_WORDS = ["rota", "navigasyon", "iptal"]
 
+    # Yes/no vocabulary for the spoken navigation confirmation. Token-matched;
+    # the same list doubles as the Vosk grammar so the confirmation listen is
+    # constrained decoding (far more robust than open vocabulary).
+    YES_WORDS = ["evet", "olur", "tamam", "başlat", "tabii", "tabi",
+                 "istiyorum", "onaylıyorum", "hadi", "başla"]
+    NO_WORDS = ["hayır", "hayir", "iptal", "istemiyorum", "vazgeç",
+                "vazgeçtim", "yok", "dur", "olmaz"]
+
     # Local queries — matched on keywords BEFORE the SLM intent classifier, so
     # they work identically in --bypass-stt mode and cannot be misrouted.
     WHERE_WORDS = ["neredeyim", "nerdeyim", "neredeyiz", "konumum"]
@@ -96,6 +104,12 @@ class VoiceCommandHandler:
         self._rec = recorder or NullRecorder()  # field-test black-box recorder
         from navigation.saved_places import SavedPlaces
         self._places = SavedPlaces(config.saved_places_path)
+        # Deferred-route state (urban canyon: command arrives before a GPS fix).
+        self._pending_cancel: Optional[threading.Event] = None
+
+    # Poll cadence of the deferred-route waiter; a class attribute so tests
+    # can shrink it without monkeypatching time.
+    PENDING_POLL_SEC = 3.0
 
     def set_stt(self, stt):
         # Single-reference attribute write; safe without a lock in CPython.
@@ -170,6 +184,12 @@ class VoiceCommandHandler:
             self._handle_navigation(text)
         elif intent == "system_command":
             self._handle_system_command(text)
+        elif self._extract_category(text) is not None:
+            # SLM said "general" but the utterance names a known destination
+            # ("ilaç almak istiyorum eczaneye gitmem lazım"). Recover through
+            # the navigation path — its confirmation question guards against
+            # the classifier being right and us being wrong.
+            self._handle_navigation(text)
         else:
             self._voice.say_prompt("Anlasildi.")
 
@@ -227,12 +247,66 @@ class VoiceCommandHandler:
     # -- Intent handlers ----------------------------------------------------
 
     def _handle_navigation(self, text):
-        """Extract destination from spoken/typed text and start route navigation."""
+        """Extract destination from spoken/typed text and start route navigation.
+
+        A destination INFERRED from a longer utterance ("ilaç almak istiyorum
+        eczaneye gitmem lazım" → eczane) is confirmed before routing: STT
+        mishears, and sending a blind user toward the wrong place costs far
+        more than one extra question. Terse direct commands ("eczane",
+        "eczaneye git") skip the question, as do typed --bypass-stt commands.
+        """
         category = self._extract_category(text)
         if not category:
             self._voice.say_prompt("Nereye gitmek istediginizi anlayamadim. Lutfen tekrar soyleyin.")
             return
+        if self._needs_confirmation(text):
+            answer = self._confirm_yes_no(
+                "En yakın %s için rota başlatılsın mı? Evet ya da hayır deyin."
+                % category
+            )
+            if answer is not True:
+                self._voice.say_prompt(
+                    "İptal edildi. Tekrar denemek için butona basın.")
+                self._rec.log_command(text, intent="navigation",
+                                      action="nav_confirm_declined")
+                return
         self.route_to(category)
+
+    def _needs_confirmation(self, text) -> bool:
+        v = self._config.voice
+        if not getattr(v, "nav_confirm_enabled", True) or self._stt is None:
+            return False  # typed commands are explicit; nothing to confirm
+        return len(text.split()) >= getattr(v, "nav_confirm_min_words", 3)
+
+    def _confirm_yes_no(self, question):
+        """Ask, listen (grammar-constrained), parse. True / False / None.
+
+        One retry on an unclear answer; anything still unclear counts as NO —
+        for a navigation system the safe default is to not start a route the
+        user may not have asked for.
+        """
+        v = self._config.voice
+        vocab = self.YES_WORDS + self.NO_WORDS
+        for attempt in range(2):
+            self._voice.say_prompt(
+                question if attempt == 0 else "Anlayamadım. Evet mi, hayır mı?")
+            try:
+                heard = self._stt.listen(
+                    timeout_sec=getattr(v, "confirm_listen_timeout", 6.0),
+                    silence_sec=getattr(v, "confirm_silence_sec", 1.2),
+                    grammar=vocab,
+                )
+            except TypeError:  # an STT double without grammar support
+                heard = self._stt.listen(
+                    timeout_sec=getattr(v, "confirm_listen_timeout", 6.0),
+                    silence_sec=getattr(v, "confirm_silence_sec", 1.2),
+                )
+            tokens = (heard or "").lower().replace(",", " ").split()
+            if any(w in tokens for w in self.NO_WORDS):
+                return False
+            if any(w in tokens for w in self.YES_WORDS):
+                return True
+        return None
 
     def route_to(self, category):
         """Start navigation to the nearest POI of ``category``.
@@ -246,7 +320,7 @@ class VoiceCommandHandler:
 
         fix = self._gps.get_coord()
         if fix is None:
-            self._voice.say_prompt("GPS sinyali bulunamadi. Lutfen acik alanda deneyin.")
+            self._defer_route(lambda: self.route_to(category), category)
             return False
 
         lat, lon, _ = fix
@@ -276,7 +350,7 @@ class VoiceCommandHandler:
 
         fix = self._gps.get_coord()
         if fix is None:
-            self._voice.say_prompt("GPS sinyali bulunamadi. Lutfen acik alanda deneyin.")
+            self._defer_route(lambda: self.route_to_coord(lat, lon), "seçilen hedef")
             return False
 
         flat, flon, _ = fix
@@ -290,6 +364,55 @@ class VoiceCommandHandler:
         self._voice.say_prompt("Hedefe rota bulunamadi.")
         return False
 
+    # -- Deferred routing (no GPS fix yet) -----------------------------------
+
+    def _defer_route(self, retry, label):
+        """Queue a navigation request until GPS produces a fix.
+
+        Urban canyons (e.g. Kızılay) often deny a fix exactly when the user
+        issues a command. Refusing the command forces them to keep re-asking;
+        instead we acknowledge it, watch for a fix on a small daemon thread,
+        and start routing automatically — with an announcement — the moment
+        one arrives. A newer command (or "iptal") replaces/cancels the wait.
+        """
+        # Replace any previous pending request.
+        if self._pending_cancel is not None:
+            self._pending_cancel.set()
+        cancel = threading.Event()
+        self._pending_cancel = cancel
+        timeout = getattr(self._config.voice, "pending_route_timeout_sec", 180.0)
+        self._voice.say_prompt(
+            "GPS sinyali henüz yok. %s hedefiniz kaydedildi; sinyal bulununca "
+            "yönlendirme otomatik başlayacak." % label.capitalize()
+        )
+        self._rec.log_command(label, intent="navigation", action="nav_deferred_no_gps")
+
+        def _wait_for_fix():
+            import time as _time
+            deadline = _time.monotonic() + timeout
+            while not (cancel.is_set() or self._stop.is_set()):
+                if self._gps.get_coord() is not None:
+                    self._voice.say_prompt("GPS sinyali bulundu.")
+                    retry()
+                    return
+                if _time.monotonic() >= deadline:
+                    self._voice.say_prompt(
+                        "GPS sinyali hâlâ yok, bekleyen hedef iptal edildi. "
+                        "Açık alanda tekrar deneyin."
+                    )
+                    return
+                cancel.wait(self.PENDING_POLL_SEC)
+
+        threading.Thread(target=_wait_for_fix, name="PendingRoute",
+                         daemon=True).start()
+
+    def _cancel_pending_route(self) -> bool:
+        """Cancel a queued no-GPS destination. True if one was pending."""
+        if self._pending_cancel is not None and not self._pending_cancel.is_set():
+            self._pending_cancel.set()
+            return True
+        return False
+
     def _handle_system_command(self, text):
         """Sleep / cancel-route / shutdown."""
         text_lower = text.lower()
@@ -300,9 +423,11 @@ class VoiceCommandHandler:
             self._modes.transition_to(SystemMode.SLEEP)
             return
 
-        # Cancel current navigation
+        # Cancel current navigation (or a destination queued waiting for GPS)
         if any(w in text_lower for w in self.STOP_NAV_WORDS):
-            if self._nav.is_active:
+            if self._cancel_pending_route():
+                self._voice.say_prompt("Bekleyen hedef iptal edildi.")
+            elif self._nav.is_active:
                 self._nav.stop_navigation()
                 self._voice.say_prompt("Navigasyon durduruldu.")
             else:

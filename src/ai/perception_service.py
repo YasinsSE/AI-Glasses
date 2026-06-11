@@ -153,6 +153,7 @@ class PerceptionService(threading.Thread):
         # Fast-path collision tripwire (B5) state.
         self._fast_collision_frames: int = 0
         self._last_fast_collision_at: float = -999.0
+        self._fast_collision_standing: bool = False  # edge-trigger state
         # Last captured BGR frame, for on-demand consumers (the "oku" OCR
         # command). cv2.read() allocates a fresh array per frame, so handing
         # out the reference is safe.
@@ -955,28 +956,52 @@ class PerceptionService(threading.Thread):
     )
 
     def _fast_collision_check(self, result, now: float) -> bool:
-        """Cheap, gating-independent stop tripwire. True when it spoke."""
+        """Cheap, gating-independent stop tripwire. True when it spoke.
+
+        "Durun" is reserved for being genuinely boxed in. When a walkable
+        corridor is visible — dead ahead or in either bottom side zone — this
+        stands down and lets the normal flow steer the user around the hazard
+        (alerts + VFH "hafif sola/sağa"), because freezing someone on a clear
+        sidewalk next to parked cars is worse than guiding them.
+        """
         ai = self._config.ai
         mask = getattr(result, "mask", None)
         if not ai.fast_collision_enabled or mask is None:
             return False
         import numpy as np
         h, w = mask.shape
-        region = mask[int(h * 0.6):, int(w * 0.3):int(w * 0.7)]
+        bottom = mask[int(h * 0.6):, :]
+        region = bottom[:, int(w * 0.3):int(w * 0.7)]
         if region.size == 0:
             return False
         ratio = float(np.isin(region, self._FAST_HAZARD_IDS).mean())
         if ratio < ai.fast_collision_ratio:
             self._fast_collision_frames = 0
+            self._fast_collision_standing = False  # situation cleared → re-arm
             return False
         self._fast_collision_frames += 1
         if self._fast_collision_frames < ai.fast_collision_persist_frames:
             return False
-        if (now - self._last_fast_collision_at) < ai.urgent_interval_sec:
-            return False  # already screamed — let the normal flow continue
+        # Escape check: enough walkable straight ahead or in a side zone means
+        # this is a "steer" situation, not a "stop" one.
+        walk_id = int(ClassID.WALKABLE_SURFACE)
+        center_walk = float((region == walk_id).mean())
+        left_walk = float((bottom[:, :int(w * 0.4)] == walk_id).mean())
+        right_walk = float((bottom[:, int(w * 0.6):] == walk_id).mean())
+        if (center_walk >= ai.fast_collision_center_walkable
+                or max(left_walk, right_walk) >= ai.fast_collision_escape_walkable):
+            return False  # normal flow steers (VFH guidance / zone warnings)
+        # Edge-triggered repeat: a standing blockage re-warns slowly; only a
+        # FRESH blockage preempts whatever is currently being spoken.
+        fresh = not self._fast_collision_standing
+        cooldown = (ai.urgent_interval_sec if fresh
+                    else ai.fast_collision_repeat_sec)
+        if (now - self._last_fast_collision_at) < cooldown:
+            return False
+        self._fast_collision_standing = True
         self._last_fast_collision_at = now
         self._last_obstacle_speak_at = now
-        self._voice.say_obstacle("Durun, önünüz kapalı", urgent=True, preempt=True)
+        self._voice.say_obstacle("Durun, önünüz kapalı", urgent=True, preempt=fresh)
         return True
 
     # ── Situation helpers ────────────────────────────────────────
@@ -992,6 +1017,7 @@ class PerceptionService(threading.Thread):
         self._band_state.clear()
         self._last_obstacle_speak_at = 0.0
         self._prev_walkable = None
+        self._fast_collision_standing = False
         self._prev_top_distance = None
         self._closing_frames = 0
         self._last_path_text = None
