@@ -158,6 +158,28 @@ class AIConfig:
     # turned a parked-car row into a 40-shout walk).
     fast_collision_repeat_sec: float = 8.0
 
+    # ── Gradual-approach escalation (11-06 school tests) ──────────────────
+    # The per-frame closing detector (walkable_drop_urgent per frame) is blind
+    # to a WALKING approach: nearing a parked vehicle erodes walkable by only
+    # 1-2% per frame, so the user closed in for 12 s in silence and the
+    # warning landed at arm's length. This windowed check catches the slow
+    # squeeze: walkable fell this much over the window while an in-path
+    # hazard stands → treat as closing (urgent tone, fast cadence).
+    closing_window_sec: float = 4.0
+    walkable_drop_window: float = 0.15
+    gradual_close_walkable_max: float = 0.30  # only when the corridor is actually getting tight
+
+    # ── Road-ahead message grading (11-06 school2 t+142) ──────────────────
+    # "Girmeyin" is reserved for a road with NO walkable continuation. If the
+    # scene still shows meaningful walkable area, the soft wording is used.
+    # And when the user has been walking ON a road-dominant surface (alley /
+    # shared street) the entry warning is meaningless — say it once as
+    # "yolda yürüyorsunuz" and go quiet.
+    road_soft_walkable: float = 0.20      # scene walkable ≥ this → soft wording
+    on_road_ratio: float = 0.45           # near-centre road share that means "already on it"
+    on_road_persist_frames: int = 4
+    on_road_min_gap_sec: float = 30.0
+
     # ── Situation tracking / escalation ──────────────────────────────────
     # A hazard must persist in the forward path for this many consecutive
     # frames before the calm "var" notice escalates to an actionable VFH
@@ -181,7 +203,10 @@ class AIConfig:
     # guard below always wins (no boost while hot).
     adaptive_fps_enabled: bool = True
     fps_idle: float = 1.0
-    fps_alert: float = 3.5
+    # 4.0: at ~150 ms/frame the pipeline fits a 250 ms budget comfortably, and
+    # the 11-06 thermal data (real zones 22-46 °C, fan at 255) shows ample
+    # headroom. Buys one extra look per second exactly when it matters.
+    fps_alert: float = 4.0
     # Visual motion metric (mean frame-diff, 0..255) below this == standing
     # still; the SAFE+still state must persist this many frames before the
     # rate drops, so a pause at a kerb does not flap the FPS.

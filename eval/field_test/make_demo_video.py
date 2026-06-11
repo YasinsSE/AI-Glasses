@@ -107,11 +107,13 @@ def status_at(real_t, percs, telem, navs, gpses):
     safety = {0: "GÜVENLİ", 1: "DİKKAT", 2: "TEHLİKE"}.get(
         p.get("safety_level") if p else None, "—")
     temps = (tl or {}).get("temps_c") or {}
+    # PMIC-Die is a fake constant zone (always 50.0 on the Nano) — exclude.
+    real_temps = [v for k, v in temps.items() if k != "PMIC-Die"]
     return {
         "safety": safety,
         "walkable": (p or {}).get("walkable"),
         "fps": (1000.0 / p["total_ms"]) if p and p.get("total_ms") else None,
-        "temp": max(temps.values()) if temps else None,
+        "temp": max(real_temps) if real_temps else None,
         "nav_status": (nv or {}).get("status"),
         "nav_dist": (nv or {}).get("distance_to_next_m"),
         "nav_step": (nv or {}).get("step_text"),

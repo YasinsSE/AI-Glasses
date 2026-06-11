@@ -575,10 +575,9 @@ class VoiceCommandHandler:
         except Exception:  # noqa: BLE001
             parts.append("GPS durumu okunamadı")
         try:
-            from main.session_recorder import read_soc_temps
-            temps = read_soc_temps()
-            if temps:
-                hottest = max(temps.values())
+            from main.session_recorder import max_real_temp, read_soc_temps
+            hottest = max_real_temp(read_soc_temps())  # PMIC-Die excluded
+            if hottest is not None:
                 parts.append(
                     "sıcaklık yüksek" if hottest >= 70.0 else "sıcaklık normal"
                 )

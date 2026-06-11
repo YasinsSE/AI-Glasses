@@ -125,8 +125,11 @@ def _prepare(session_dir: Path, events: list) -> dict:
     telem = []
     for e in by_type.get("telemetry", []):
         temps = e.get("temps_c") or {}
+        # PMIC-Die is a fake constant zone on the Nano (always 50.0) — taking
+        # the max through it flattens the whole thermal chart.
+        real = [v for k, v in temps.items() if k != "PMIC-Die"]
         telem.append({"t": rel(e),
-                      "temp": max(temps.values()) if temps else None,
+                      "temp": max(real) if real else None,
                       "gpu": e.get("gpu_pct"),
                       "ram": (e.get("ram") or {}).get("used_pct")})
 

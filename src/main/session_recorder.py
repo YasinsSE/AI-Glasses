@@ -52,6 +52,20 @@ def read_soc_temps() -> dict:
     return temps
 
 
+# Jetson Nano quirk: the PMIC-Die zone is not a real sensor — it reports a
+# CONSTANT (50.0 °C on this board, 100 °C on some others). Including it in a
+# max() pins every "SoC temperature" reading to that constant: the 11-06
+# school sessions reported a flat 50 °C peak while the real zones (CPU/GPU/AO)
+# ranged 22-46 °C. Every consumer must take the max through this filter.
+FAKE_THERMAL_ZONES = ("PMIC-Die",)
+
+
+def max_real_temp(temps: dict):
+    """Hottest REAL thermal zone in °C, or None. Filters fake constant zones."""
+    real = [v for k, v in temps.items() if k not in FAKE_THERMAL_ZONES]
+    return max(real) if real else None
+
+
 def _load_avg() -> Optional[float]:
     try:
         return round(os.getloadavg()[0], 2)
@@ -452,9 +466,10 @@ class SessionRecorder:
 
     def _telemetry_loop(self) -> None:
         while not self._stop.wait(self._rc.telemetry_interval_s):
-            temps = read_soc_temps()
-            if temps:
-                self._status["temp"] = max(temps.values())
+            temps = read_soc_temps()  # full dict logged; consumers filter fakes
+            real_max = max_real_temp(temps)
+            if real_max is not None:
+                self._status["temp"] = real_max
             gpu = read_gpu_load_pct()
             ram = read_mem()
             power = read_power_mw()

@@ -4,6 +4,7 @@ Runs PerceptionPipeline at a fixed FPS and routes alerts through VoicePolicy.
 Loop is gated on system mode, active TTS, and post-nav silence window.
 """
 
+import collections
 import contextlib
 import logging
 import os
@@ -154,6 +155,11 @@ class PerceptionService(threading.Thread):
         self._fast_collision_frames: int = 0
         self._last_fast_collision_at: float = -999.0
         self._fast_collision_standing: bool = False  # edge-trigger state
+        # Walkable history for the windowed gradual-approach detector.
+        self._walk_hist: "collections.deque" = collections.deque()
+        # "Walking ON a road" tracking (alley / shared street).
+        self._on_road_frames: int = 0
+        self._last_on_road_at: float = -999.0
         # Last captured BGR frame, for on-demand consumers (the "oku" OCR
         # command). cv2.read() allocates a fresh array per frame, so handing
         # out the reference is safe.
@@ -384,11 +390,11 @@ class PerceptionService(threading.Thread):
         if (now - self._last_thermal_check) < ai.thermal_check_interval_sec:
             return
         self._last_thermal_check = now
-        from main.session_recorder import read_soc_temps
+        from main.session_recorder import max_real_temp, read_soc_temps
         temps = read_soc_temps()
-        if not temps:
+        hottest = max_real_temp(temps)  # PMIC-Die is a fake constant zone
+        if hottest is None:
             return  # not a Jetson (desktop/mock) — guard is a no-op
-        hottest = max(temps.values())
         if not self._thermal_throttled and hottest >= ai.thermal_throttle_c:
             self._thermal_throttled = True
             logger.warning(
@@ -667,8 +673,20 @@ class PerceptionService(threading.Thread):
                      if (self._prev_top_distance is not None and dist is not None) else 0.0)
         self._prev_walkable = scene.walkable_ratio
         self._prev_top_distance = dist
+        # Windowed GRADUAL approach: a walking pace erodes walkable by only
+        # 1-2% per frame, invisible to the per-frame deltas above — but very
+        # visible over a few seconds (school tests: 12 s silent close-in).
+        self._walk_hist.append((now, scene.walkable_ratio))
+        while self._walk_hist and now - self._walk_hist[0][0] > ai.closing_window_sec:
+            self._walk_hist.popleft()
+        window_drop = (self._walk_hist[0][1] - scene.walkable_ratio
+                       if len(self._walk_hist) >= 3 else 0.0)
+        gradual_closing = (in_path
+                           and window_drop >= ai.walkable_drop_window
+                           and scene.walkable_ratio <= ai.gradual_close_walkable_max)
         closing = (walk_drop >= ai.walkable_drop_urgent
-                   or dist_drop >= ai.closing_distance_urgent_m)
+                   or dist_drop >= ai.closing_distance_urgent_m
+                   or gradual_closing)
         # The closing signal must PERSIST across frames before it can fire a side
         # alarm: a single noisy distance jump (uncalibrated FOV / class flicker)
         # must not be read as "rushing at me".
@@ -749,6 +767,12 @@ class PerceptionService(threading.Thread):
         safety_increased = safety_level > self._last_safety
         if urgent:
             min_interval = ai.urgent_interval_sec          # override the 20 s repeat
+        elif in_path and is_close:
+            # A CLOSE blocker standing in the walking path must not hide
+            # behind the 20 s same-situation gate (school tests: the user
+            # reached the obstacle inside that window). Repeat at the
+            # change-cadence instead.
+            min_interval = ai.min_obstacle_interval_sec
         elif sig_changed or escalate_now or safety_increased:
             min_interval = ai.min_obstacle_interval_sec
         else:
@@ -920,6 +944,30 @@ class PerceptionService(threading.Thread):
             self._crossing_frames = 0
         confirmed = self._crossing_frames >= ai.crossing_persist_frames
 
+        # Already WALKING ON a road-dominant surface (alley / shared street,
+        # school2 t+142): an entry warning is meaningless mid-road. Say the
+        # situation once, then stay quiet on a long cooldown.
+        mask = getattr(result, "mask", None)
+        on_road_now = False
+        if mask is not None:
+            import numpy as np
+            h, w = mask.shape
+            near_centre = mask[int(h * 0.6):, int(w * 0.3):int(w * 0.7)]
+            if near_centre.size:
+                on_road_now = (float((near_centre == int(ClassID.VEHICLE_ROAD)).mean())
+                               >= ai.on_road_ratio)
+        self._on_road_frames = self._on_road_frames + 1 if on_road_now else 0
+        if self._on_road_frames >= ai.on_road_persist_frames:
+            if (now - self._last_on_road_at) >= ai.on_road_min_gap_sec:
+                self._last_on_road_at = now
+                self._last_road_at = now
+                text = "Araç yolunda yürüyorsunuz, dikkatli ilerleyin"
+                self._voice.say_obstacle(text)
+                self._rec.log_perception(result, chosen=text)
+            else:
+                self._rec.log_perception(result, chosen=None)
+            return
+
         if (now - self._last_road_at) < ai.ambient_min_gap_sec:
             self._rec.log_perception(result, chosen=None)
             return
@@ -935,10 +983,17 @@ class PerceptionService(threading.Thread):
         elif expected:
             text = ("Rotanız yoldan karşıya geçiyor, geçidi göremiyorum, "
                     "çok dikkatli geçin")
+        elif result.scene.walkable_ratio >= ai.road_soft_walkable:
+            # Walkable area clearly continues in view → the road is part of the
+            # walking environment, not a wall. Caution without the hard stop —
+            # the field feedback was that "girmeyin" here freezes the user on a
+            # perfectly walkable path.
+            text = "Önünüzde araç yolu var, dikkatli ilerleyin"
         else:
-            # No crossing confirmed → protective "do not enter". This is also the
-            # safe fallback when the strict crossing shields miss a real crossing:
-            # over-cautioning "girmeyin" beats waving the user into traffic.
+            # No crossing confirmed AND no walkable continuation → protective
+            # "do not enter". This is also the safe fallback when the strict
+            # crossing shields miss a real crossing: over-cautioning "girmeyin"
+            # beats waving the user into traffic.
             text = "Dikkat, önünüzde araç yolu, girmeyin"
         self._last_road_at = now
         self._voice.say_obstacle(text)
@@ -1018,6 +1073,8 @@ class PerceptionService(threading.Thread):
         self._last_obstacle_speak_at = 0.0
         self._prev_walkable = None
         self._fast_collision_standing = False
+        self._walk_hist.clear()
+        self._on_road_frames = 0
         self._prev_top_distance = None
         self._closing_frames = 0
         self._last_path_text = None
