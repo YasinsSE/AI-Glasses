@@ -42,9 +42,11 @@ class FakeNav:
 
     def __init__(self):
         self.routed_category = None
+        self.origin = None
 
     def navigate_to_nearest(self, coord, category):
         self.routed_category = category
+        self.origin = (coord.lat, coord.lon)
         poi = SimpleNamespace(distance_m=80.0,
                               coord=SimpleNamespace(lat=39.92, lon=32.85))
         return True, "ok", poi
@@ -53,10 +55,11 @@ class FakeNav:
         return []
 
 
-def _handler(tmp_path, timeout=5.0):
+def _handler(tmp_path, timeout=5.0, fallback_origin=None):
     cfg = SimpleNamespace(
         saved_places_path=str(tmp_path / "places.json"),
         bypass_stt=True,
+        fallback_origin=fallback_origin,
         voice=SimpleNamespace(
             stt_listen_timeout=5, stt_silence_sec=1.5,
             nav_confirm_enabled=True, nav_confirm_min_words=3,
@@ -116,3 +119,23 @@ def test_timeout_gives_up_audibly(tmp_path):
     handler.route_to("eczane")
     assert _wait_until(lambda: any("hâlâ yok" in s for s in voice.said))
     assert nav.routed_category is None
+
+
+def test_fallback_origin_routes_immediately_without_fix(tmp_path):
+    """Kızılay demo: no fix + --fallback-origin → route NOW from the known
+    test-start coordinate instead of queueing."""
+    handler, nav, gps, voice = _handler(
+        tmp_path, fallback_origin=(39.924377, 32.845707))
+    assert handler.route_to("eczane") is True
+    assert nav.routed_category == "eczane"
+    assert nav.origin == (39.924377, 32.845707)
+    assert any("kayıtlı başlangıç konumu" in s for s in voice.said), voice.said
+
+
+def test_real_fix_beats_fallback_origin(tmp_path):
+    handler, nav, gps, voice = _handler(
+        tmp_path, fallback_origin=(39.924377, 32.845707))
+    gps.fix = (39.9300, 32.8500, 0.5)  # live GPS available
+    handler.route_to("eczane")
+    assert nav.origin == (39.9300, 32.8500)
+    assert not any("kayıtlı başlangıç" in s for s in voice.said)

@@ -119,6 +119,13 @@ class ALASConfig:
     # Settle delay AFTER "SYSTEM READY" before the auto-route is issued, so the
     # boot announcements finish and the camera/GPS pipeline is steady first.
     auto_nav_delay_sec: float = 10.0
+    # --fallback-origin "LAT,LON": known test-start coordinate used as the
+    # route ORIGIN when a nav command arrives and GPS has no fix (urban
+    # canyon). A real fix always wins — this only stops a demo from stalling.
+    # The destination still comes from the offline OSM map (POI search);
+    # only the starting point needs this crutch. None = queue and wait for
+    # a fix instead (deferred routing).
+    fallback_origin: Optional[Tuple[float, float]] = None
 
     # ── Field-test recorder ──────────────────────────────────────
     rec: RecorderConfig = field(default_factory=RecorderConfig)
@@ -187,6 +194,10 @@ class ALASConfig:
                             help="No-mic mode: auto-route to this exact coordinate "
                                  "(e.g. 39.9245,32.8465); overrides --auto-nav. Best for "
                                  "testing turn-by-turn — pick a destination that needs turns")
+        parser.add_argument("--fallback-origin", metavar="LAT,LON", default=None,
+                            help="Known test-start coordinate used as the route ORIGIN "
+                                 "when a nav command arrives while GPS has no fix. A real "
+                                 "fix always takes precedence")
         args = parser.parse_args(argv)
 
         config = cls()
@@ -228,6 +239,12 @@ class ALASConfig:
                 config.auto_nav_coord = (float(_lat_s), float(_lon_s))
             except (ValueError, AttributeError):
                 parser.error("--auto-nav-coord must be 'LAT,LON', e.g. 39.9245,32.8465")
+        if args.fallback_origin:
+            try:
+                _lat_s, _lon_s = args.fallback_origin.split(",")
+                config.fallback_origin = (float(_lat_s), float(_lon_s))
+            except (ValueError, AttributeError):
+                parser.error("--fallback-origin must be 'LAT,LON', e.g. 39.9243,32.8457")
 
         # Anchor relative paths so the entry point can be invoked from any
         # working directory.

@@ -318,7 +318,7 @@ class VoiceCommandHandler:
             self._voice.say_prompt("Mevcut rota iptal ediliyor, yeni rota hesaplaniyor.")
             self._nav.stop_navigation()
 
-        fix = self._gps.get_coord()
+        fix = self._origin_fix()
         if fix is None:
             self._defer_route(lambda: self.route_to(category), category)
             return False
@@ -348,7 +348,7 @@ class VoiceCommandHandler:
             self._voice.say_prompt("Mevcut rota iptal ediliyor, yeni rota hesaplaniyor.")
             self._nav.stop_navigation()
 
-        fix = self._gps.get_coord()
+        fix = self._origin_fix()
         if fix is None:
             self._defer_route(lambda: self.route_to_coord(lat, lon), "seçilen hedef")
             return False
@@ -363,6 +363,27 @@ class VoiceCommandHandler:
             return True
         self._voice.say_prompt("Hedefe rota bulunamadi.")
         return False
+
+    def _origin_fix(self):
+        """Route origin: real GPS fix first; the configured --fallback-origin
+        as a demo crutch when there is none; None → caller defers the route.
+
+        The DESTINATION never needs GPS (POIs live in the offline OSM map) —
+        only the starting point does, which is why a known test-start
+        coordinate is enough to keep a no-fix demo moving. The route tracker
+        switches to real fixes automatically once GPS comes alive.
+        """
+        fix = self._gps.get_coord()
+        if fix is not None:
+            return fix
+        fb = getattr(self._config, "fallback_origin", None)
+        if fb:
+            self._voice.say_prompt(
+                "GPS sinyali yok, kayıtlı başlangıç konumu kullanılıyor.")
+            self._rec.log_command("%s,%s" % fb, intent="navigation",
+                                  action="nav_fallback_origin")
+            return (fb[0], fb[1], 0.0)
+        return None
 
     # -- Deferred routing (no GPS fix yet) -----------------------------------
 

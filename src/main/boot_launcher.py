@@ -72,11 +72,17 @@ LAUNCH_CMD = [
     "--model", "models/segmentation/alas_engine.trt",
     "--record",
     "--auto-standby",
-    # ── Mic-less fallbacks, disabled for the microphone tests ──────────────
-    # Re-enable --bypass-stt + --auto-nav-coord together if the mic fails in
-    # the field (PTT then re-routes to the fixed destination instead of STT).
-    # "--bypass-stt",
-    # "--auto-nav-coord", "39.988679,32.863508",
+    # Kızılay test start: if a spoken nav command arrives while GPS still has
+    # no fix, this becomes the route origin (a real fix always wins). The
+    # destination always comes from the offline OSM map, so routing works
+    # end-to-end even before the first fix.
+    "--fallback-origin", "39.924377,32.845707",
+    # ── Mic-less mode (ACTIVE: current mic hardware is unreliable — USB
+    # converter chain / speaker's built-in mic; a dedicated USB mic is on
+    # order). PTT routes to the test pharmacy near Kızılay. Comment these two
+    # out again when the new microphone arrives.
+    "--bypass-stt",
+    "--auto-nav-coord", "39.921553,32.844164",
     # Training-data capture (saves raw frames to outputs/dataset_raw/) — off
     # for now so the loop stays lean. Re-add when collecting data again.
     # "--capture-dataset",
